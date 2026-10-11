@@ -1,0 +1,39 @@
+﻿# Java compiled files and packaged build output
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+replay_pid*
+
+# Maven, Gradle and general build artifacts
+**/target/
+**/build/
+**/out/
+**/bin/
+**/dist/
+.gradle/
+
+# VS Code local workspace settings
+.vscode/
+*.code-workspace
+.history/
+
+# Local environment files (keep example templates trackable)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependency caches and local logs
+node_modules/
+*.log
+
+# OS and editor temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
