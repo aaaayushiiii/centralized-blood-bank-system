@@ -1,0 +1,263 @@
+{
+  "info": {
+    "name": "Blood Bank & Emergency Routing API (BACSE202)",
+    "_postman_id": "b100d-bank-api-collection",
+    "description": "Postman Collection for VIT Course Project - Member 3 (Java Backend & JDBC). Tests all REST APIs including Auth, Geolocation Nearby Search, Hospital Scoped Inventory, and 4-Table Emergency FEFO Transactions.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Citizen Login (Valid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"citizen@demo.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/auth/login",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Hospital Staff Login (Scoped to HOSP-01)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"staff.central@cityhospital.org\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/auth/login",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Citizen Registration",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Karthik Verma\",\n  \"email\": \"karthik@sample.com\",\n  \"password\": \"password123\",\n  \"phone\": \"+919988776655\",\n  \"role\": \"CITIZEN\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/auth/register",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "Hospital Staff Registration",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Dr. Sunita Rao\",\n  \"email\": \"sunita.rao@cityhospital.org\",\n  \"password\": \"password123\",\n  \"phone\": \"+919122334455\",\n  \"role\": \"HOSPITAL_STAFF\",\n  \"hospital_id\": \"HOSP-01\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/auth/register",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "auth", "register"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Nearby Hospitals (Geolocation)",
+      "item": [
+        {
+          "name": "Nearby Hospitals by Pincode (560001 - MG Road)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8080/api/hospitals/nearby?pincode=560001&radius=30",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "hospitals", "nearby"],
+              "query": [
+                { "key": "pincode", "value": "560001" },
+                { "key": "radius", "value": "30" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Nearby Hospitals by Coordinates (Lat/Lon)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8080/api/hospitals/nearby?lat=12.971598&lon=77.594562&radius=15",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "hospitals", "nearby"],
+              "query": [
+                { "key": "lat", "value": "12.971598" },
+                { "key": "lon", "value": "77.594562" },
+                { "key": "radius", "value": "15" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Hospital Inventory Dashboard",
+      "item": [
+        {
+          "name": "Staff Scoped Inventory (HOSP-01 City Central)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8080/api/inventory/dashboard?hospitalId=HOSP-01",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "inventory", "dashboard"],
+              "query": [
+                { "key": "hospitalId", "value": "HOSP-01" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Global City-wide Inventory",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8080/api/inventory/dashboard",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "inventory", "dashboard"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Emergency Request (4-Table FEFO Transaction)",
+      "item": [
+        {
+          "name": "Post Emergency Blood Demand (2 Units O+)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hospital_id\": \"HOSP-01\",\n  \"blood_group\": \"O\",\n  \"rh_factor\": \"+\",\n  \"units_requested\": 2,\n  \"priority\": \"CRITICAL\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/requests/emergency",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "requests", "emergency"]
+            }
+          }
+        },
+        {
+          "name": "Post Urgent Blood Demand (1 Unit B+)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hospital_id\": \"HOSP-02\",\n  \"blood_group\": \"B\",\n  \"rh_factor\": \"+\",\n  \"units_requested\": 1,\n  \"priority\": \"URGENT\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/requests/emergency",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "requests", "emergency"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Donor & Blood Availability Search",
+      "item": [
+        {
+          "name": "Register New Donor",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Vikram Aditya\",\n  \"blood_group\": \"O\",\n  \"rh_factor\": \"-\",\n  \"age\": 24,\n  \"gender\": \"M\",\n  \"contact_number\": \"+919876543219\",\n  \"last_donation_date\": \"2026-06-15\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8080/api/donors/register",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "donors", "register"]
+            }
+          }
+        },
+        {
+          "name": "Search Available Blood (O+ in Pincode 560001)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8080/api/blood/search?bloodGroup=O&rhFactor=%2B&pincode=560001&radius=30",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8080",
+              "path": ["api", "blood", "search"],
+              "query": [
+                { "key": "bloodGroup", "value": "O" },
+                { "key": "rhFactor", "value": "%2B" },
+                { "key": "pincode", "value": "560001" },
+                { "key": "radius", "value": "30" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
