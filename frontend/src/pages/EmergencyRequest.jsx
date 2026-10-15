@@ -1,4 +1,3 @@
-import { PREVIEW_ENABLED } from "../preview/config.js";
 import { useRef, useState } from "react";
 import { api } from "../services/api.js";
 import {
@@ -15,9 +14,7 @@ export default function EmergencyRequest({
   setHospitalId,
   assignedHospitalId,
   dataApi = api,
-  preview: requestedPreview = false,
 }) {
-  const preview = PREVIEW_ENABLED && requestedPreview;
   const { hospitals, loading, error, retry } = useHospitals(
     assignedHospitalId,
     dataApi,
@@ -56,9 +53,7 @@ export default function EmergencyRequest({
       setState({
         error: "",
         loading: false,
-        success: preview
-          ? "Preview request created. No real blood request was submitted."
-          : "Request submitted. Blood has not been allocated yet.",
+        success: "Request submitted. Blood has not been allocated yet.",
       });
     } catch (err) {
       setState({ error: err.message, success: "", loading: false });
@@ -77,7 +72,7 @@ export default function EmergencyRequest({
       setState({
         error: "",
         loading: false,
-        success: `${preview ? "Preview allocation only" : "Allocation response received"}: ${data.allocations.length} units. Request status: ${data.request.request_status}.`,
+        success: `Allocation response received: ${data.allocations.length} units. Request status: ${data.request.request_status}.`,
       });
     } catch (err) {
       setState({ error: err.message, success: "", loading: false });

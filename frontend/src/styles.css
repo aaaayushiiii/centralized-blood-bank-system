@@ -119,31 +119,6 @@ select:focus-visible,
   font-size: 11px;
   margin-top: 4px;
 }
-.mode-banner {
-  background: #f4ecea;
-  border-block: 1px solid #e8dad7;
-  padding: 10px 48px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 12px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.mode-banner strong {
-  white-space: nowrap;
-}
-.mode-banner.live {
-  background: #edf2ed;
-  border-color: var(--border);
-}
-.mode-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
 .view-nav {
   display: flex;
   gap: 32px;
@@ -707,10 +682,6 @@ footer {
   .app-header {
     padding: 0 25px;
   }
-  .mode-banner {
-    padding: 10px 25px;
-    justify-content: flex-start;
-  }
   .view-nav {
     margin: 0 25px;
     gap: 24px;
@@ -766,15 +737,6 @@ footer {
   }
   .course-label span {
     display: none;
-  }
-  .mode-banner {
-    padding: 10px 20px;
-    flex-wrap: wrap;
-    gap: 6px 9px;
-    font-size: 11px;
-  }
-  .mode-banner > span:last-child {
-    flex-basis: 100%;
   }
   .view-nav {
     margin: 0 20px;

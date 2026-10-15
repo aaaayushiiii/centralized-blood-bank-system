@@ -1,7 +1,4 @@
-import { PREVIEW_ENABLED } from "./preview/config.js";
-import { previewPaths } from "./preview/policy.js";
-import PreviewOptions from "./components/PreviewOptions.jsx";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CitizenPortal from "./pages/CitizenPortal.jsx";
 import HospitalCommandCenter from "./pages/HospitalCommandCenter.jsx";
 import EmergencyRequest from "./pages/EmergencyRequest.jsx";
@@ -17,11 +14,6 @@ import {
   roleHome,
   canAccess,
 } from "./auth/routes.js";
-// Build-time command gate ensures the preview workspace and fixtures are excluded.
-const PreviewWorkspace =
-  import.meta.env.DEV && __ENABLE_LOCAL_PREVIEW__
-    ? lazy(() => import("./preview/PreviewWorkspace.jsx"))
-    : null;
 export default function App() {
   const [path, setPath] = useState(readRoute);
   const { user, loading, error, retry, logout } = useAuth();
@@ -79,24 +71,17 @@ export default function App() {
     }
   }
   const staff = user?.role === "HOSPITAL_STAFF";
-  const isPreviewRoute = PREVIEW_ENABLED && previewPaths.includes(path);
-  const viewLinks = isPreviewRoute
-    ? [
-        ["/preview/citizen", "Citizen portal"],
-        ["/preview/hospital", "Hospital command center"],
-        ["/preview/request", "Emergency request"],
-      ]
-    : user
-      ? staff
-        ? [
-            ["/hospital", "Hospital command center"],
-            ["/request", "Emergency request"],
-          ]
-        : [["/citizen", "Citizen portal"]]
-      : [
-          ["/", "Home"],
-          ["/roles", "Choose your role"],
-        ];
+  const viewLinks = user
+    ? staff
+      ? [
+          ["/hospital", "Hospital command center"],
+          ["/request", "Emergency request"],
+        ]
+      : [["/citizen", "Citizen portal"]]
+    : [
+        ["/", "Home"],
+        ["/roles", "Choose your role"],
+      ];
   const protectedRoute = Boolean(routes[path]);
   const allowed = canAccess(path, user);
   const sessionBusy = loading || logoutState.loading;
@@ -122,11 +107,7 @@ export default function App() {
           </span>
         </a>
         <div className="auth-header-actions">
-          {isPreviewRoute ? (
-            <a className="secondary auth-link" href="#/roles">
-              Exit preview
-            </a>
-          ) : user && !loading ? (
+          {user && !loading ? (
             <>
               <span className="auth-user">{user.full_name}</span>
               <button
@@ -144,18 +125,6 @@ export default function App() {
           )}
         </div>
       </header>
-      {isPreviewRoute && (
-        <div className="mode-banner" role="status">
-          <span className="mode-dot" />
-          <strong>Development preview — not authenticated</strong>
-          <span>
-            Fictional hospitals, inventory and distances. No actual
-            availability. Changes stay in memory and reset when you exit or
-            reload. Reference date: 13 Oct 2026. Do not enter real personal
-            data.
-          </span>
-        </div>
-      )}
       <nav className="view-nav" aria-label="Main navigation">
         {viewLinks.map(([href, label]) => (
           <a
@@ -169,23 +138,12 @@ export default function App() {
       </nav>
       <main id="main-content" ref={main} tabIndex={-1}>
         <Feedback error={logoutState.error} />
-        {isPreviewRoute ? (
-          <Suspense
-            fallback={
-              <section className="empty" role="status">
-                Loading development preview…
-              </section>
-            }
-          >
-            <PreviewWorkspace path={path} />
-          </Suspense>
-        ) : sessionBusy ? (
+        {sessionBusy ? (
           <section className="empty" role="status">
             <h2>
               {logoutState.loading ? "Signing out" : "Checking your session"}
             </h2>
             <p>Please wait while your account session is verified.</p>
-            {!logoutState.loading && <PreviewOptions both />}
           </section>
         ) : (
           <>
