@@ -7,11 +7,16 @@ test("operational API wrappers preserve paths, payloads and cookie credentials",
   const server = await createServer({
     server: { middlewareMode: true, hmr: false },
     appType: "custom",
+    envDir: false,
+    define: {
+      "import.meta.env.VITE_API_BASE_URL": JSON.stringify("http://127.0.0.1:8080/api"),
+      "import.meta.env.VITE_API_MODE": JSON.stringify("live"),
+    },
   });
   const originalFetch = globalThis.fetch;
   const calls = [];
   const hospital = {
-    hospital_id: "H-TEST",
+    hospital_id: 90001,
     name: "Test Hospital",
     address: "Test Address",
     phone: "0000000000",
@@ -39,12 +44,13 @@ test("operational API wrappers preserve paths, payloads and cookie credentials",
       };
     else if (path.endsWith("/requests"))
       result = { request: { request_id: "R-TEST", request_status: "Pending" } };
-    else result = [hospital];
+    else result = [hospital, { ...hospital, hospital_id: 90007 }];
     return new Response(JSON.stringify(result), { status: 200 });
   };
   try {
     const { api } = await server.ssrLoadModule("/src/services/api.js");
-    await api.getHospitals();
+    const hospitals = await api.getHospitals();
+    assert.deepEqual(hospitals.map((row) => row.hospital_id), [90001, 90007]);
     await api.searchHospitals({
       pincode: "632001",
       blood_group: "O",
