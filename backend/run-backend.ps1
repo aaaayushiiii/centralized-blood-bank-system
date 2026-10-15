@@ -1,14 +1,21 @@
-Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "Starting Blood Bank JDBC Backend Server..." -ForegroundColor Green
-Write-Host "========================================================" -ForegroundColor Cyan
-
-$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-
-$ojdbc = "C:\Users\ankit\.m2\repository\com\oracle\database\jdbc\ojdbc8\19.8.0.0\ojdbc8-19.8.0.0.jar"
-$jackson1 = "C:\Users\ankit\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.15.2\jackson-databind-2.15.2.jar"
-$jackson2 = "C:\Users\ankit\.m2\repository\com\fasterxml\jackson\core\jackson-core\2.15.2\jackson-core-2.15.2.jar"
-$jackson3 = "C:\Users\ankit\.m2\repository\com\fasterxml\jackson\core\jackson-annotations\2.15.2\jackson-annotations-2.15.2.jar"
-$cp = "target/classes;$ojdbc;$jackson1;$jackson2;$jackson3"
-
-java -cp $cp com.bloodbank.server.BloodBankServer
+param([string]$OracleJdbcJar = $env:OJDBC_JAR)
+$ErrorActionPreference = "Stop"
+$java = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin/java.exe" } else { "java" }
+$javac = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin/javac.exe" } else { "javac" }
+Push-Location $PSScriptRoot
+try {
+    if (-not $OracleJdbcJar -or -not (Test-Path -LiteralPath $OracleJdbcJar -PathType Leaf)) {
+        throw "Set OJDBC_JAR to the absolute path of your Oracle JDBC jar."
+    }
+    foreach ($key in @("ORACLE_URL", "ORACLE_USER", "ORACLE_PASSWORD")) {
+        if (-not [Environment]::GetEnvironmentVariable($key)) { throw "Missing $key" }
+    }
+    $driver = (Resolve-Path -LiteralPath $OracleJdbcJar).Path
+    $classes = Join-Path ([IO.Path]::GetTempPath()) ("bloodbank-java-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force $classes | Out-Null
+    $sources = @(Get-ChildItem src/main/java -Recurse -Filter *.java | ForEach-Object FullName)
+    & $javac -encoding UTF-8 --release 17 -d $classes @sources
+    if ($LASTEXITCODE -ne 0) { throw "Java compilation failed" }
+    & $java -cp "$classes;$driver" com.bloodbank.server.BloodBankServer
+    if ($LASTEXITCODE -ne 0) { throw "Backend exited with code $LASTEXITCODE" }
+} finally { Pop-Location }

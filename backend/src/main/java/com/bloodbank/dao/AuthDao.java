@@ -1,224 +1,63 @@
 package com.bloodbank.dao;
-
 import com.bloodbank.config.DatabaseConnection;
-
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import com.bloodbank.util.*;
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
-/**
- * Authentication Data Access Object.
- * Handles Citizen & Hospital Staff sign-up, login, and hospital-scoped staff permissions.
- */
-public class AuthDao {
-
-    // In-Memory store fallback for immediate testing & demos if Oracle DB is offline
-    private static final Map<String, Map<String, Object>> IN_MEMORY_USERS = new ConcurrentHashMap<>();
-    private static final Map<String, String> SESSIONS = new ConcurrentHashMap<>();
-
-    static {
-        // Seed default Citizen: citizen@demo.com / password123
-        Map<String, Object> cUser = new LinkedHashMap<>();
-        cUser.put("user_id", "USR-001");
-        cUser.put("email", "citizen@demo.com");
-        cUser.put("password_hash", hashPassword("password123"));
-        cUser.put("role", "CITIZEN");
-        cUser.put("full_name", "Ananya Sharma");
-        cUser.put("phone", "+919876543210");
-        cUser.put("hospital_id", null);
-        IN_MEMORY_USERS.put("citizen@demo.com", cUser);
-
-        // Seed default Hospital Staff: staff.central@cityhospital.org / password123
-        Map<String, Object> sUser1 = new LinkedHashMap<>();
-        sUser1.put("user_id", "USR-002");
-        sUser1.put("email", "staff.central@cityhospital.org");
-        sUser1.put("password_hash", hashPassword("password123"));
-        sUser1.put("role", "HOSPITAL_STAFF");
-        sUser1.put("full_name", "Dr. Ramesh Kumar");
-        sUser1.put("phone", "+919811223344");
-        sUser1.put("hospital_id", "HOSP-01");
-        sUser1.put("hospital_name", "City Central Blood Bank & Hospital");
-        IN_MEMORY_USERS.put("staff.central@cityhospital.org", sUser1);
-
-        // Seed second Hospital Staff: staff.stjude@stjude.org / password123
-        Map<String, Object> sUser2 = new LinkedHashMap<>();
-        sUser2.put("user_id", "USR-003");
-        sUser2.put("email", "staff.stjude@stjude.org");
-        sUser2.put("password_hash", hashPassword("password123"));
-        sUser2.put("role", "HOSPITAL_STAFF");
-        sUser2.put("full_name", "Sister Mary Varghese");
-        sUser2.put("phone", "+919822334455");
-        sUser2.put("hospital_id", "HOSP-02");
-        sUser2.put("hospital_name", "St. Jude Care Multispecialty");
-        IN_MEMORY_USERS.put("staff.stjude@stjude.org", sUser2);
+public final class AuthDao {
+ private static final String DUMMY_HASH=Passwords.hash("Non-account timing equalization "+UUID.randomUUID());
+ public static Map<String,Object> current(Connection c,long userId) throws SQLException {
+  try(PreparedStatement s=c.prepareStatement("SELECT u.user_id,u.full_name,u.email,u.phone,u.user_role,u.account_status,hs.hospital_id,h.name AS hospital_name FROM users u LEFT JOIN hospital_staff hs ON hs.user_id=u.user_id LEFT JOIN hospital h ON h.hospital_id=hs.hospital_id AND h.is_active='Y' WHERE u.user_id=?")) {
+   s.setLong(1,userId);try(ResultSet r=s.executeQuery()) {
+    if(!r.next() || !"ACTIVE".equals(r.getString("account_status"))) throw new ApiException(401,"SESSION_INVALID","Sign in with an active account");
+    Object hospital=r.getObject("hospital_id");
+    if("HOSPITAL_STAFF".equals(r.getString("user_role")) && (hospital==null || r.getString("hospital_name")==null)) throw new ApiException(403,"ASSIGNMENT_REQUIRED","An active hospital assignment is required");
+    return Data.map("user_id",r.getLong("user_id"),"full_name",r.getString("full_name"),"email",r.getString("email"),"phone",r.getString("phone"),"role",r.getString("user_role"),"status",r.getString("account_status"),"hospital_id",hospital==null?null:r.getLong("hospital_id"),"hospital_name",r.getString("hospital_name"));
+   }
+  }
+ }
+ public Map<String,Object> current(long id) throws SQLException {
+  try(Connection c=DatabaseConnection.getConnection()) {return current(c,id);}
+ }
+ public Map<String,Object> authenticate(String email,String password,String role) throws SQLException {
+  try(Connection c=DatabaseConnection.getConnection()) {
+   c.setAutoCommit(false);
+   try {
+    long id=0;String hash=DUMMY_HASH,status="",actualRole="";
+    try(PreparedStatement s=c.prepareStatement("SELECT user_id,password_hash,account_status,user_role FROM users WHERE email=? FOR UPDATE")) {
+     s.setString(1,email.toLowerCase(Locale.ROOT).trim());try(ResultSet r=s.executeQuery()) {if(r.next()) {id=r.getLong(1);hash=r.getString(2);status=r.getString(3);actualRole=r.getString(4);}}
     }
-
-    public static String hashPassword(String password) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] encodedhash = digest.digest(password.getBytes(StandardCharsets.UTF_8));
-            StringBuilder hexString = new StringBuilder();
-            for (byte b : encodedhash) {
-                String hex = Integer.toHexString(0xff & b);
-                if (hex.length() == 1) hexString.append('0');
-                hexString.append(hex);
-            }
-            return hexString.toString();
-        } catch (Exception e) {
-            return Integer.toHexString(password.hashCode());
-        }
+    boolean verified=Passwords.verify(password,hash);
+    if(!verified || !"ACTIVE".equals(status) || !actualRole.equals(role)) {
+     if(id!=0) try(PreparedStatement s=c.prepareStatement("UPDATE users SET failed_login_count=LEAST(failed_login_count+1,999),account_status=CASE WHEN account_status='ACTIVE' AND failed_login_count>=4 THEN 'LOCKED' ELSE account_status END WHERE user_id=?")) {s.setLong(1,id);s.executeUpdate();}
+     c.commit();throw new ApiException(401,"INVALID_CREDENTIALS","Invalid credentials or account unavailable");
     }
-
-    public Map<String, Object> authenticate(String email, String password) {
-        String hashed = hashPassword(password);
-
-        // 1. Try Oracle Database query first if connected
-        if (DatabaseConnection.isConnected()) {
-            String sql = "SELECT u.user_id, u.email, u.password_hash, u.role, u.full_name, u.phone, " +
-                         "       s.hospital_id, h.name as hospital_name " +
-                         "FROM USERS u " +
-                         "LEFT JOIN HOSPITAL_STAFF s ON u.user_id = s.user_id " +
-                         "LEFT JOIN HOSPITALS h ON s.hospital_id = h.hospital_id " +
-                         "WHERE LOWER(u.email) = LOWER(?)";
-            try (Connection conn = DatabaseConnection.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql)) {
-                stmt.setString(1, email);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    if (rs.next()) {
-                        String storedHash = rs.getString("password_hash");
-                        if (storedHash.equalsIgnoreCase(hashed)) {
-                            Map<String, Object> user = new LinkedHashMap<>();
-                            user.put("user_id", rs.getString("user_id"));
-                            user.put("email", rs.getString("email"));
-                            user.put("role", rs.getString("role"));
-                            user.put("full_name", rs.getString("full_name"));
-                            user.put("phone", rs.getString("phone"));
-                            user.put("hospital_id", rs.getString("hospital_id"));
-                            user.put("hospital_name", rs.getString("hospital_name"));
-                            String token = "TOKEN-" + UUID.randomUUID().toString();
-                            user.put("token", token);
-                            SESSIONS.put(token, (String) user.get("user_id"));
-                            return user;
-                        }
-                    }
-                }
-            } catch (SQLException e) {
-                System.err.println("[AuthDao] Oracle query failed, falling back to memory store: " + e.getMessage());
-            }
-        }
-
-        // 2. In-Memory fallback store
-        Map<String, Object> user = IN_MEMORY_USERS.get(email.toLowerCase().trim());
-        if (user != null) {
-            String storedHash = (String) user.get("password_hash");
-            if (storedHash.equalsIgnoreCase(hashed)) {
-                Map<String, Object> res = new LinkedHashMap<>(user);
-                res.remove("password_hash");
-                String token = "TOKEN-" + UUID.randomUUID().toString();
-                res.put("token", token);
-                SESSIONS.put(token, (String) res.get("user_id"));
-                return res;
-            }
-        }
-        return null; // Invalid credentials
+    Map<String,Object> user=current(c,id);
+    try(PreparedStatement s=c.prepareStatement("UPDATE users SET failed_login_count=0,last_login_at=SYSTIMESTAMP WHERE user_id=?")) {s.setLong(1,id);s.executeUpdate();}
+    c.commit();return user;
+   } catch(SQLException|RuntimeException e) {Data.rollback(c,e);throw e;}
+  }
+ }
+ public void register(Map<String,Object> body,boolean staff) throws SQLException {
+  String name=Data.text(body,"full_name",100), email=Data.text(body,"email",254).toLowerCase(Locale.ROOT);
+  Object pw=body.get("password");
+  if(!(pw instanceof String)||((String)pw).length()<12||((String)pw).length()>128) throw new ApiException(400,"INVALID_PASSWORD","Use a password between 12 and 128 characters");
+  String password=(String)pw;
+  if(!email.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+")) throw new ApiException(400,"INVALID_EMAIL","Invalid email address");
+  String phone=body.get("phone")==null?null:Data.text(body,"phone",15);
+  if(phone!=null && !phone.matches("[+]?[0-9 ()-]{7,15}")) throw new ApiException(400,"INVALID_PHONE","Invalid phone number");
+  String hash=Passwords.hash(password);
+  try(Connection c=DatabaseConnection.getConnection()) {
+   c.setAutoCommit(false);
+   try {
+    Long hospital=staff?Data.id(body.get("hospital_id")):null;
+    if(staff) try(PreparedStatement s=c.prepareStatement("SELECT hospital_id FROM hospital WHERE hospital_id=? AND is_active='Y'")) {s.setLong(1,hospital);try(ResultSet r=s.executeQuery()) {if(!r.next())throw new ApiException(422,"INVALID_HOSPITAL","Select an active hospital");}}
+    long id=Data.next(c,"seq_users");
+    try(PreparedStatement s=c.prepareStatement("INSERT INTO users(user_id,full_name,email,phone,password_hash,user_role,account_status) VALUES(?,?,?,?,?,?,?)")) {
+     s.setLong(1,id);s.setString(2,name);s.setString(3,email);s.setString(4,phone);s.setString(5,hash);s.setString(6,staff?"HOSPITAL_STAFF":"CITIZEN");s.setString(7,staff?"PENDING_VERIFICATION":"ACTIVE");s.executeUpdate();
     }
-
-    public Map<String, Object> registerCitizen(String email, String password, String fullName, String phone) throws Exception {
-        String cleanEmail = email.toLowerCase().trim();
-        if (IN_MEMORY_USERS.containsKey(cleanEmail)) {
-            throw new Exception("Email already registered: " + email);
-        }
-
-        String userId = "USR-" + (100 + IN_MEMORY_USERS.size() + 1);
-        String hashed = hashPassword(password);
-
-        if (DatabaseConnection.isConnected()) {
-            String sql = "INSERT INTO USERS (user_id, email, password_hash, role, full_name, phone) VALUES (?, ?, ?, 'CITIZEN', ?, ?)";
-            try (Connection conn = DatabaseConnection.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql)) {
-                stmt.setString(1, userId);
-                stmt.setString(2, cleanEmail);
-                stmt.setString(3, hashed);
-                stmt.setString(4, fullName);
-                stmt.setString(5, phone);
-                stmt.executeUpdate();
-            } catch (SQLException e) {
-                System.err.println("[AuthDao] SQL Insert error: " + e.getMessage());
-            }
-        }
-
-        Map<String, Object> newUser = new LinkedHashMap<>();
-        newUser.put("user_id", userId);
-        newUser.put("email", cleanEmail);
-        newUser.put("password_hash", hashed);
-        newUser.put("role", "CITIZEN");
-        newUser.put("full_name", fullName);
-        newUser.put("phone", phone);
-        newUser.put("hospital_id", null);
-        IN_MEMORY_USERS.put(cleanEmail, newUser);
-
-        Map<String, Object> res = new LinkedHashMap<>(newUser);
-        res.remove("password_hash");
-        res.put("token", "TOKEN-" + UUID.randomUUID().toString());
-        return res;
-    }
-
-    public Map<String, Object> registerHospitalStaff(String email, String password, String fullName, String phone, String hospitalId) throws Exception {
-        String cleanEmail = email.toLowerCase().trim();
-        if (IN_MEMORY_USERS.containsKey(cleanEmail)) {
-            throw new Exception("Email already registered: " + email);
-        }
-
-        String userId = "USR-" + (100 + IN_MEMORY_USERS.size() + 1);
-        String staffId = "STF-" + (100 + IN_MEMORY_USERS.size() + 1);
-        String hashed = hashPassword(password);
-
-        if (DatabaseConnection.isConnected()) {
-            Connection conn = null;
-            try {
-                conn = DatabaseConnection.getConnection();
-                conn.setAutoCommit(false);
-                String sql1 = "INSERT INTO USERS (user_id, email, password_hash, role, full_name, phone) VALUES (?, ?, ?, 'HOSPITAL_STAFF', ?, ?)";
-                try (PreparedStatement stmt1 = conn.prepareStatement(sql1)) {
-                    stmt1.setString(1, userId);
-                    stmt1.setString(2, cleanEmail);
-                    stmt1.setString(3, hashed);
-                    stmt1.setString(4, fullName);
-                    stmt1.setString(5, phone);
-                    stmt1.executeUpdate();
-                }
-
-                String sql2 = "INSERT INTO HOSPITAL_STAFF (staff_id, user_id, hospital_id) VALUES (?, ?, ?)";
-                try (PreparedStatement stmt2 = conn.prepareStatement(sql2)) {
-                    stmt2.setString(1, staffId);
-                    stmt2.setString(2, userId);
-                    stmt2.setString(3, hospitalId);
-                    stmt2.executeUpdate();
-                }
-                conn.commit();
-            } catch (SQLException e) {
-                if (conn != null) conn.rollback();
-                throw e;
-            } finally {
-                if (conn != null) conn.setAutoCommit(true);
-            }
-        }
-
-        Map<String, Object> newUser = new LinkedHashMap<>();
-        newUser.put("user_id", userId);
-        newUser.put("email", cleanEmail);
-        newUser.put("password_hash", hashed);
-        newUser.put("role", "HOSPITAL_STAFF");
-        newUser.put("full_name", fullName);
-        newUser.put("phone", phone);
-        newUser.put("hospital_id", hospitalId);
-        IN_MEMORY_USERS.put(cleanEmail, newUser);
-
-        Map<String, Object> res = new LinkedHashMap<>(newUser);
-        res.remove("password_hash");
-        res.put("token", "TOKEN-" + UUID.randomUUID().toString());
-        return res;
-    }
+    if(staff) try(PreparedStatement s=c.prepareStatement("INSERT INTO hospital_staff(staff_id,user_id,hospital_id,designation) VALUES(seq_hospital_staff.NEXTVAL,?,?,?)")) {s.setLong(1,id);s.setLong(2,hospital);s.setString(3,"Pending staff access request");s.executeUpdate();}
+    c.commit();
+   } catch(SQLException|RuntimeException e) {Data.rollback(c,e);throw e;}
+  }
+ }
 }

@@ -1,60 +1,24 @@
 package com.bloodbank.config;
-
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-
-/**
- * JDBC Connection Factory for Oracle Database.
- * Configured with parameters matching standard VIT Oracle XE / 19c setups.
- */
-public class DatabaseConnection {
-
-    // Default Oracle XE Configuration
-    private static final String DEFAULT_URL = "jdbc:oracle:thin:@localhost:1521:XE";
-    private static final String DEFAULT_USER = "SYSTEM";
-    private static final String DEFAULT_PASS = "oracle";
-    private static final String DRIVER_CLASS = "oracle.jdbc.OracleDriver";
-
-    private static String dbUrl;
-    private static String dbUser;
-    private static String dbPass;
-    private static boolean driverLoaded = false;
-    private static Boolean connectionHealthy = null;
-
-    static {
-        dbUrl = System.getenv().getOrDefault("ORACLE_URL", DEFAULT_URL);
-        dbUser = System.getenv().getOrDefault("ORACLE_USER", DEFAULT_USER);
-        dbPass = System.getenv().getOrDefault("ORACLE_PASSWORD", DEFAULT_PASS);
-
-        try {
-            Class.forName(DRIVER_CLASS);
-            driverLoaded = true;
-            System.out.println("[DatabaseConnection] Oracle JDBC Driver successfully loaded: " + DRIVER_CLASS);
-        } catch (ClassNotFoundException e) {
-            System.err.println("[DatabaseConnection] Notice: Oracle JDBC driver not on classpath. Falling back to active InMemory/Simulation Store.");
-            driverLoaded = false;
-        }
-    }
-
-    public static Connection getConnection() throws SQLException {
-        if (!driverLoaded) {
-            throw new SQLException("Oracle JDBC Driver not loaded");
-        }
-        return DriverManager.getConnection(dbUrl, dbUser, dbPass);
-    }
-
-    public static boolean isConnected() {
-        if (!driverLoaded) return false;
-        try (Connection conn = getConnection()) {
-            connectionHealthy = conn != null && !conn.isClosed();
-            return connectionHealthy;
-        } catch (Exception e) {
-            connectionHealthy = false;
-            return false;
-        }
-    }
-
-    public static String getDbUrl() { return dbUrl; }
-    public static String getDbUser() { return dbUser; }
+import java.sql.*;
+public final class DatabaseConnection {
+ private DatabaseConnection() {}
+ private static String required(String key) throws SQLException {
+  String v=System.getenv(key);
+  if(v==null || v.trim().isEmpty()) throw new SQLNonTransientConnectionException("Missing database configuration: "+key,"08001");
+  return v;
+ }
+ public static Connection getConnection() throws SQLException {
+  String url=required("ORACLE_URL"), user=required("ORACLE_USER"), password=required("ORACLE_PASSWORD");
+  if(!url.startsWith("jdbc:oracle:thin:@")) throw new SQLNonTransientConnectionException("Expected Oracle thin JDBC URL","08001");
+  try { Class.forName("oracle.jdbc.OracleDriver"); }
+  catch(ClassNotFoundException e) { throw new SQLNonTransientConnectionException("Oracle JDBC driver is missing","08001",e); }
+  DriverManager.setLoginTimeout(10);
+  java.util.Properties props=new java.util.Properties();
+  props.setProperty("user",user); props.setProperty("password",password);
+  props.setProperty("oracle.net.CONNECT_TIMEOUT","10000"); props.setProperty("oracle.jdbc.ReadTimeout","12000");
+  return DriverManager.getConnection(url,props);
+ }
+ public static boolean isConnected() {
+  try(Connection c=getConnection()) { return c.isValid(3); } catch(SQLException e) { return false; }
+ }
 }

@@ -1,259 +1,113 @@
-# 🩸 Blood Bank & Emergency Routing System — Java Backend & JDBC (Member 3)
+# Java/JDBC blood bank backend
 
-> **Course:** BACSE202 — Database Systems (Phase 2 & 3 Implementation)  
-> **Component:** Member 3 — Java Backend, JDBC & REST API Engine  
-> **Server Port:** `8080` | **Frontend URL:** `http://localhost:5173` | **CORS:** Enabled
+The production backend is `com.bloodbank.server.BloodBankServer`, using JDK 17+ and Oracle JDBC. There is no mock-success mode. `server.js` is a retired entrypoint that deliberately exits with an error. Never place `target/test-classes` or test build directories on the production classpath.
 
----
+## Database contract
 
-## 📋 Architecture & Role Summary (Member 3)
+Source of truth: `origin/feature/oracle-database:database/schema_baseline.sql`, `views.sql`, `procedures.sql`, and `api_database_contract.md`. This backend uses HOSPITAL, USERS, HOSPITAL_STAFF, DONOR, BLOOD_BAGS, REQUEST, ALLOCATION, and BAG_STATUS_LOG. It does not install, migrate, drop, or recreate any database object.
 
-Member 3 is responsible for **connecting the frontend with Oracle SQL** via Java JDBC:
-1. **Oracle Database Connectivity:** Configured via Oracle JDBC Driver (`ojdbc8`).
-2. **Authentication Engine:** Supports Citizen and Hospital Staff sign-up/login with SHA-256 password hashing.
-3. **Hospital-Scoped Inventory:** Hospital staff access only their hospital's inventory; citizens/admins access global views.
-4. **Geolocation Routing:** Haversine distance engine and Pincode resolver for nearest hospital matching.
-5. **4-Table FEFO Emergency Transaction:** Atomically updates `REQUESTS`, `BLOOD_BAGS`, `ALLOCATIONS`, and `BAG_STATUS_LOG`.
-6. **CORS Configuration:** Fully configured with `Access-Control-Allow-Credentials: true` for React (Vite: `5173`).
+The application schema must already contain the approved tables, `seq_users`, `seq_hospital_staff`, `seq_donor`, `seq_request`, the allocation/log sequences used by PL/SQL, `PRC_NEARBY_HOSPITALS`, `PRC_EMERGENCY_DISPATCH`, their dependent functions/procedures, and `V_REQUEST_ALLOCATION_DETAIL`. Use a dedicated application account with the required privileges, never SYSTEM.
 
----
+The conflicting PR scripts below are excluded from this corrected branch; **do not execute copies from the original PR**:
 
-## 🚀 How to Run the Java Backend
+- `database/00_phase1_core_schema.sql`
+- `database/01_auth_and_schema_updates.sql`
+- `database/02_plsql_emergency_transaction.sql`
+- `database/03_seed_data.sql`
 
-### Method 1: IntelliJ IDEA / Eclipse (Recommended for Students)
-1. Open IntelliJ or Eclipse.
-2. Select **Open / Import Project** $\to$ choose `blood-bank-backend/`.
-3. Open `src/main/java/com/bloodbank/server/BloodBankServer.java`.
-4. Right-click and choose **Run 'BloodBankServer.main()'**.
-5. The console will display:
-   ```text
-   =================================================================
-    BLOOD BANK & EMERGENCY ROUTING BACKEND (JDBC / REST API)
-    Server successfully running on: http://localhost:8080
-    CORS configured for React Frontend: http://localhost:5173
-   =================================================================
-   ```
+## Run on Windows
 
-### Method 2: Maven Terminal
-```bash
-mvn clean compile
-mvn exec:java -Dexec.mainClass="com.bloodbank.server.BloodBankServer"
+Prerequisites: JDK 17 or newer (`java` and `javac`), an Oracle JDBC jar, an existing Oracle service with the approved objects, and application credentials. Maven is optional. The POM retains `com.oracle.database.jdbc:ojdbc8:19.8.0.0`; this dependency has not been downloaded or tested against live Oracle here. No Jackson or Node runtime is needed.
+
+From the repository root, in PowerShell:
+
+```powershell
+cd backend
+# Set JAVA_HOME to your installed JDK if java/javac are not correctly on PATH.
+# Example discovery: java -XshowSettings:properties -version
+$env:ORACLE_URL = Read-Host 'Oracle JDBC URL (e.g. jdbc:oracle:thin:@//localhost:1521/XEPDB1)'
+$env:ORACLE_USER = Read-Host 'Application schema username'
+$env:ORACLE_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host 'Database password' -AsSecureString)).Password
+$env:OJDBC_JAR = Read-Host 'Absolute path to your Oracle JDBC jar'
+.\run-backend.ps1
 ```
 
----
+The script checks configuration, compiles only production sources with `javac --release 17`, and runs Java with the supplied driver. Build output goes to a unique temporary directory to avoid OneDrive class-loading issues. `run-backend.bat` delegates to the same script. Stop with Ctrl+C. The script does not load `.env` files automatically.
 
-## 📡 API Contract for Frontend Integration (Member 2 Hand-off)
+If Maven is available, an alternative way to obtain the declared driver is:
 
-All responses follow the unified standard response envelope:
-```json
-{
-  "success": true,
-  "message": "Human-readable status message",
-  "data": { ... },
-  "timestamp": 1728987654321
-}
+```powershell
+mvn compile org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy-dependencies
+$env:OJDBC_JAR = (Resolve-Path .\target\dependency\ojdbc8-19.8.0.0.jar).Path
+.\run-backend.ps1
 ```
 
-### 1. Authentication Endpoints
+Maven resolution was not verified in the implementation environment because Maven was unavailable. The plain jar does not bundle JDBC; `java -jar` alone is not the supported launch command.
 
-#### `POST /api/auth/login`
-- **Request Body:**
-  ```json
-  {
-    "email": "staff.central@cityhospital.org",
-    "password": "password123"
-  }
-  ```
-- **Response (`200 OK`):**
-  ```json
-  {
-    "success": true,
-    "message": "Login successful. Welcome back, Dr. Ramesh Kumar!",
-    "data": {
-      "user_id": "USR-002",
-      "email": "staff.central@cityhospital.org",
-      "role": "HOSPITAL_STAFF",
-      "full_name": "Dr. Ramesh Kumar",
-      "phone": "+919811223344",
-      "hospital_id": "HOSP-01",
-      "hospital_name": "City Central Blood Bank & Hospital",
-      "token": "TOKEN-3f82a4c1-..."
-    }
-  }
-  ```
+Default API URL: `http://127.0.0.1:8080/api`. Keep React's existing `VITE_API_BASE_URL` at this value. Use the same hostname for the browser frontend and API (127.0.0.1 with 127.0.0.1, or localhost with localhost), since session cookies are SameSite=Lax. No frontend edits are needed.
 
-#### `POST /api/auth/register`
-- **Request Body (Citizen):**
-  ```json
-  {
-    "full_name": "Karthik Verma",
-    "email": "karthik@sample.com",
-    "password": "password123",
-    "phone": "+919988776655",
-    "role": "CITIZEN"
-  }
-  ```
-- **Request Body (Hospital Staff):**
-  ```json
-  {
-    "full_name": "Dr. Sunita Rao",
-    "email": "sunita@cityhospital.org",
-    "password": "password123",
-    "phone": "+919122334455",
-    "role": "HOSPITAL_STAFF",
-    "hospital_id": "HOSP-01"
-  }
-  ```
+Optional environment variables:
 
----
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8080` | HTTP port |
+| `BIND_ADDRESS` | `127.0.0.1` | Listening interface |
+| `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Exact comma-separated browser origins |
+| `COOKIE_SECURE` | `false` | Set `true` behind HTTPS for deployment |
 
-### 2. Geolocation & Nearby Hospital Search
+For nonlocal use, terminate HTTPS at a trusted reverse proxy and set `COOKIE_SECURE=true` and explicit frontend origins. Sessions are bounded, in memory, expire after eight hours (guest CSRF sessions: 30 minutes), and are invalidated by logout or a server restart. This server is a single-instance deployment; clustered shared sessions are not implemented.
 
-#### `GET /api/hospitals/nearby?pincode=560001&radius=25`
-- **Query Parameters:**
-  - `pincode` *(optional)*: Indian PIN code (e.g. `560001`, `560034`, `632014` for VIT)
-  - `lat`, `lon` *(optional)*: Direct browser GPS coordinates
-  - `radius` *(optional, default 25)*: Search radius in kilometers
-- **Response (`200 OK`):**
-  ```json
-  {
-    "success": true,
-    "message": "Found 3 hospitals within 25.0 km.",
-    "data": {
-      "search_pincode": "560001",
-      "radius_km": 25.0,
-      "total_found": 3,
-      "hospitals": [
-        {
-          "hospital_id": "HOSP-01",
-          "name": "City Central Blood Bank & Hospital",
-          "latitude": 12.971598,
-          "longitude": 77.594562,
-          "address": "102 MG Road, Central District, Bangalore",
-          "phone": "+918023456789",
-          "available_units": 48,
-          "distance_km": 0.0
-        },
-        {
-          "hospital_id": "HOSP-02",
-          "name": "St. Jude Care Multispecialty",
-          "latitude": 12.93444,
-          "longitude": 77.61923,
-          "address": "45 80-Feet Road, Koramangala 4th Block, Bangalore",
-          "phone": "+918098765432",
-          "available_units": 32,
-          "distance_km": 4.95
-        }
-      ]
-    }
-  }
-  ```
+## React API contract
 
----
+Paths below are relative to `/api`. Errors have `{ "error": { "code": "...", "message": "..." } }`. Oracle configuration/connection failures return 503; SQL failures return a sanitized 500 (duplicate records: 409). Empty database results remain empty.
 
-### 3. Inventory Dashboard
+| Method and path | Access and response |
+|---|---|
+| GET `/auth/me` | Issues guest cookie and random CSRF token with 401; authenticated response is `{user, csrf_token}` with 200 |
+| POST `/auth/register/citizen` | `{email,password,full_name,phone?}` -> 201 `{status:"REGISTERED"}` |
+| POST `/auth/register/hospital` | Same plus numeric `hospital_id` -> 201 `{status:"PENDING_APPROVAL"}` |
+| POST `/auth/login` | `{email,password,role}` -> `{user,csrf_token}`; rotates session cookie |
+| POST `/auth/logout` | Invalidates server session and cookie |
+| GET `/hospitals` | Hospital array; authenticated staff receive only their active assigned hospital |
+| GET `/hospitals/nearby` | `pincode`, `blood_group`, `rh_factor`, optional `radius`, or `lat` and `lon` -> `{hospitals:[{hospital,distance_km,available_units}]}` |
+| GET `/hospitals/{id}/inventory` | Approved staff only; scopes to authenticated assignment regardless of supplied ID; `{as_of_date,near_expiry_days,bags}` |
+| POST `/donors` | Citizen only; `{full_name,age,gender,contact_number,last_donation_date,blood_group,rh_factor}` -> 201 `{donor:{donor_id}}` |
+| POST `/requests` | Staff only; `{hospital_id,blood_group,rh_factor,units_requested,priority}` -> 201 `{request}` with PENDING; hospital scope comes from account |
+| POST `/requests/{id}/allocations` | Staff at owning hospital; `{}` -> `{request,allocations,outcome,message}` from genuine dispatch |
+| GET `/requests/{id}/allocations` | Owning hospital staff or requesting citizen; returns stored `{request,allocations}` without dispatching |
+| GET `/health` | 200 only if an actual JDBC connection validates; otherwise 503; does not prove schema compatibility |
 
-#### `GET /api/inventory/dashboard` *(Global)* or `?hospitalId=HOSP-01` *(Staff Scoped)*
-- **Response (`200 OK`):**
-  ```json
-  {
-    "success": true,
-    "message": "Live inventory retrieved for hospital: HOSP-01",
-    "data": {
-      "filter_hospital_id": "HOSP-01",
-      "total_units": 8,
-      "available_units": 8,
-      "reserved_units": 0,
-      "expiring_within_7_days": 2,
-      "group_breakdown": {
-        "A+": 1, "A-": 1, "B+": 1, "B-": 1,
-        "AB+": 1, "AB-": 1, "O+": 1, "O-": 1
-      },
-      "inventory_items": [
-        {
-          "bag_id": "BAG-101",
-          "blood_group": "O",
-          "rh_factor": "+",
-          "blood_type": "O+",
-          "collection_date": "2026-10-04",
-          "expiry_date": "2026-11-15",
-          "days_to_expiry": 32,
-          "status": "AVAILABLE",
-          "hospital_id": "HOSP-01",
-          "hospital_name": "City Central Blood Bank & Hospital",
-          "hospital_phone": "+918023456789",
-          "donor_id": "D-01"
-        }
-      ]
-    }
-  }
-  ```
+Compatibility aliases: POST `/requests/emergency` creates a pending request only; GET `/inventory/dashboard` returns the authenticated hospital's inventory envelope; GET `/blood/search` uses the same search envelope and accepts `bloodGroup`/`rhFactor` aliases. These are not separate simulation engines.
 
----
+Every POST requires the cookie and `X-CSRF-Token` from GET `/auth/me`. React already performs this handshake. For Postman, first get a guest session; set the CSRF collection variable from the response, then log in and refresh it from the login response. The included collection automates token capture and uses Postman's cookie jar. Enter credentials in local variables; never export populated passwords.
 
-### 4. Emergency Request (4-Table FEFO Transaction)
+## Mapping decisions and limitations
 
-#### `POST /api/requests/emergency`
-- **Request Body:**
-  ```json
-  {
-    "hospital_id": "HOSP-01",
-    "blood_group": "O",
-    "rh_factor": "+",
-    "units_requested": 2,
-    "priority": "CRITICAL"
-  }
-  ```
-- **Response (`200 OK`):**
-  ```json
-  {
-    "success": true,
-    "message": "All 2 units successfully allocated via FEFO matching.",
-    "data": {
-      "request_id": "REQ-87391",
-      "hospital_id": "HOSP-01",
-      "blood_group": "O",
-      "rh_factor": "+",
-      "units_requested": 2,
-      "units_allocated": 2,
-      "priority": "CRITICAL",
-      "status": "FULFILLED",
-      "allocated_bags": ["BAG-101", "BAG-203"],
-      "message": "All 2 units successfully allocated via FEFO matching.",
-      "timestamp": "2026-10-14T21:30:00"
-    }
-  }
-  ```
+- Oracle stores numeric IDs; responses return JSON numbers. React accepts these IDs. Blood group and Rh are combined for Oracle and split for React inventory/request responses.
+- `Critical` -> CRITICAL, `Urgent` -> HIGH, `Routine` -> NORMAL. Quantities must be whole numbers from 1 to 999.
+- Search delegates RBC compatibility, expiry filtering, and stock selection to `PRC_NEARBY_HOSPITALS`. Available counts include compatible donor groups, not just exact-group bags. Dispatch delegates FEFO and locking to approved PL/SQL; there is no fallback allocation algorithm.
+- Pincode coordinate data is absent from the approved schema. For a pincode with active geolocated hospitals, search uses the centroid of those actual hospital coordinates as an approximate search origin. A pincode with no such records returns 422 LOCATION_UNKNOWN. This is not full postal geocoding; explicit lat/lon supports precise origins without a schema change.
+- A bag expiring today is unavailable under the approved rule (`expiry_date > TRUNC(SYSDATE)`). Inventory uses Oracle's date, title-case React labels, and shows such AVAILABLE rows as Expired without changing database rows.
+- React has no patient fields. REQUEST.PATIENT_NAME receives the literal nonclinical label `Hospital stock request`, with a matching remark; no patient identity is invented. This endpoint records a hospital requirement, not a named-patient clinical request.
+- DONOR has no age, gender or user-link columns. Age/gender are validated, but not stored; date_of_birth remains NULL because a birth date cannot be inferred from age. Name, combined blood group, phone, last donation date and a sequence-generated donor code are persisted. No unsupported identity link or medical eligibility claim is returned. The approved phone column allows 15 characters even though the frontend accepts up to 20; longer numbers return a clear 400.
+- Staff access requests are stored as PENDING_VERIFICATION and cannot log in until an administrator independently verifies the assignment and activates the account. No public endpoint approves accounts. Approval is an administrative operation against the existing USERS account, not a schema migration.
+- Passwords use salted PBKDF2-HMAC-SHA256, 600,000 iterations, JDK cryptographic APIs, constant-time comparison, and a versioned stored format. Existing test placeholder/legacy SHA hashes are rejected. Use registration to create a real hashed account; staff then require approval. Failed login counters lock an active account after five failures. Authentication requests are also rate limited per source IP.
 
----
+## Validation
 
-### 5. Donor Registration & Blood Search
+```powershell
+.\run-tests.ps1
+```
 
-#### `POST /api/donors/register`
-- **Request Body:**
-  ```json
-  {
-    "full_name": "Vikram Aditya",
-    "blood_group": "O",
-    "rh_factor": "-",
-    "age": 24,
-    "gender": "M",
-    "contact_number": "+919876543219",
-    "last_donation_date": "2026-06-15"
-  }
-  ```
+This compiles Java 17 production/test sources in a temporary directory, runs DAO/codec/password regression tests and HTTP tests on port 18089, and restores temporary environment settings. The JDBC double is confined to `src/test/java/oracle/jdbc/OracleDriver.java`, accepts only `jdbc:oracle:thin:@TEST-ONLY`, and is never on the production launch classpath. These tests verify Java decisions, parameter binding, resources and transactions; they do not validate Oracle SQL compilation, PL/SQL execution, or concurrent Oracle locking.
 
-#### `GET /api/blood/search?bloodGroup=O&rhFactor=%2B&pincode=560001`
-- Returns hospitals having units in stock, sorted by nearest distance!
+Before deployment, an authorized operator must verify against the real application schema:
 
----
+1. Confirm the approved tables, columns, sequences, views, functions and procedures exist and are valid. Do not run the conflicting PR SQL or recreate tables.
+2. Configure actual JDBC service URL, credentials and driver; call `/api/health`.
+3. Register accounts, administratively approve staff, and complete cookie-backed login.
+4. Search and inspect inventory, including empty/expired stock and different compatible groups.
+5. Create a request and verify PENDING with no allocations; dispatch it and inspect REQUEST, ALLOCATION, BLOOD_BAGS and BAG_STATUS_LOG. Verify repeat dispatch is rejected and cross-hospital access is blocked.
+6. Verify rollback and concurrent dispatch on test records in a dedicated test schema. Allocation commits real changes; never run this against production records casually.
 
-## 🧪 Postman Testing (Phase 2 & 3 Viva Deliverable)
-
-1. Open **Postman** desktop app.
-2. Click **Import** $\to$ choose `blood-bank-backend/postman_collection.json`.
-3. All 10 pre-configured requests will load across 5 organized folders.
-4. Execute each request against `http://localhost:8080` and capture screenshots of:
-   - Status code `200 OK` / `201 Created`
-   - Response time
-   - Formatted JSON response body
+No live Oracle JDBC operation has been verified during this implementation. The approved seed accounts use `TEST-ONLY-NOT-A-REAL-HASH` and are intentionally unusable for login.

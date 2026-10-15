@@ -1,248 +1,66 @@
 package com.bloodbank.dao;
-
 import com.bloodbank.config.DatabaseConnection;
-
+import com.bloodbank.util.*;
 import java.sql.*;
-import java.time.LocalDateTime;
 import java.util.*;
-
-/**
- * Emergency Request Data Access Object.
- * Executes the 4-Table Atomic FEFO (First-Expiring, First-Out) matching transaction across:
- * 1. REQUESTS (logs incoming demand)
- * 2. BLOOD_BAGS (locks selected units and transitions status to RESERVED)
- * 3. ALLOCATIONS (creates M:N junction links with timestamp)
- * 4. BAG_STATUS_LOG (appends immutable audit trail for hemovigilance)
- */
-public class EmergencyRequestDao {
-
-    private static final List<Map<String, Object>> IN_MEMORY_REQUESTS = new ArrayList<>();
-    private static final List<Map<String, Object>> IN_MEMORY_ALLOCATIONS = new ArrayList<>();
-    private static final List<Map<String, Object>> IN_MEMORY_STATUS_LOGS = new ArrayList<>();
-
-    public Map<String, Object> createEmergencyRequest(String hospitalId, String bloodGroup, String rhFactor, int unitsRequested, String priority) throws Exception {
-        if (hospitalId == null || hospitalId.trim().isEmpty()) {
-            hospitalId = "HOSP-01"; // Default hospital
-        }
-        if (unitsRequested <= 0) {
-            throw new IllegalArgumentException("units_requested must be greater than 0");
-        }
-        if (priority == null || priority.trim().isEmpty()) {
-            priority = "URGENT";
-        }
-
-        String requestId = "REQ-" + (System.currentTimeMillis() % 100000);
-        List<String> allocatedBagIds = new ArrayList<>();
-        String finalStatus = "PENDING";
-        String message = "";
-
-        // 1. Execute against Oracle Database if connected
-        if (DatabaseConnection.isConnected()) {
-            Connection conn = null;
-            try {
-                conn = DatabaseConnection.getConnection();
-
-                // First attempt: Try Calling the PL/SQL Stored Procedure
-                try (CallableStatement cstmt = conn.prepareCall("{call PROC_ALLOCATE_EMERGENCY_BLOOD(?, ?, ?, ?, ?, ?, ?, ?, ?)}")) {
-                    cstmt.setString(1, requestId);
-                    cstmt.setString(2, hospitalId);
-                    cstmt.setString(3, bloodGroup);
-                    cstmt.setString(4, rhFactor);
-                    cstmt.setInt(5, unitsRequested);
-                    cstmt.setString(6, priority);
-                    cstmt.registerOutParameter(7, Types.NUMERIC); // units_allocated
-                    cstmt.registerOutParameter(8, Types.VARCHAR); // request_status
-                    cstmt.registerOutParameter(9, Types.VARCHAR); // message
-                    cstmt.execute();
-
-                    int allocated = cstmt.getInt(7);
-                    finalStatus = cstmt.getString(8);
-                    message = cstmt.getString(9);
-
-                    // Fetch allocated bag IDs for the response payload
-                    String qBags = "SELECT bag_id FROM ALLOCATIONS WHERE request_id = ?";
-                    try (PreparedStatement pst = conn.prepareStatement(qBags)) {
-                        pst.setString(1, requestId);
-                        try (ResultSet rs = pst.executeQuery()) {
-                            while (rs.next()) allocatedBagIds.add(rs.getString("bag_id"));
-                        }
-                    }
-
-                    Map<String, Object> result = new LinkedHashMap<>();
-                    result.put("request_id", requestId);
-                    result.put("hospital_id", hospitalId);
-                    result.put("blood_group", bloodGroup);
-                    result.put("rh_factor", rhFactor);
-                    result.put("units_requested", unitsRequested);
-                    result.put("units_allocated", allocated);
-                    result.put("priority", priority);
-                    result.put("status", finalStatus);
-                    result.put("allocated_bags", allocatedBagIds);
-                    result.put("message", message);
-                    result.put("timestamp", LocalDateTime.now().toString());
-                    return result;
-
-                } catch (SQLException procEx) {
-                    System.err.println("[EmergencyRequestDao] Stored proc not found, executing pure JDBC 4-Table transaction: " + procEx.getMessage());
-                }
-
-                // Second attempt: Native JDBC Atomic 4-Table Transaction
-                conn.setAutoCommit(false);
-
-                // Step 1: Insert into REQUESTS
-                String sqlReq = "INSERT INTO REQUESTS (request_id, hospital_id, req_blood_group, req_rh_factor, units_requested, priority, status, request_time) " +
-                                "VALUES (?, ?, ?, ?, ?, ?, 'PENDING', SYSTIMESTAMP)";
-                try (PreparedStatement pReq = conn.prepareStatement(sqlReq)) {
-                    pReq.setString(1, requestId);
-                    pReq.setString(2, hospitalId);
-                    pReq.setString(3, bloodGroup);
-                    pReq.setString(4, rhFactor);
-                    pReq.setInt(5, unitsRequested);
-                    pReq.setString(6, priority);
-                    pReq.executeUpdate();
-                }
-
-                // Step 2: Select matching available units in FEFO order (First Expiring First Out)
-                String sqlFind = "SELECT bag_id FROM BLOOD_BAGS WHERE blood_group = ? AND rh_factor = ? " +
-                                 "AND status = 'AVAILABLE' AND expiry_date >= TRUNC(SYSDATE) " +
-                                 "ORDER BY expiry_date ASC";
-                List<String> candidateBags = new ArrayList<>();
-                try (PreparedStatement pFind = conn.prepareStatement(sqlFind)) {
-                    pFind.setString(1, bloodGroup);
-                    pFind.setString(2, rhFactor);
-                    try (ResultSet rs = pFind.executeQuery()) {
-                        while (rs.next() && candidateBags.size() < unitsRequested) {
-                            candidateBags.add(rs.getString("bag_id"));
-                        }
-                    }
-                }
-
-                // Step 3 & 4: Update BLOOD_BAGS, insert into ALLOCATIONS and BAG_STATUS_LOG
-                for (String bagId : candidateBags) {
-                    String allocId = "ALC-" + (System.currentTimeMillis() % 100000) + "-" + bagId;
-
-                    // Update BLOOD_BAGS
-                    try (PreparedStatement pUpd = conn.prepareStatement("UPDATE BLOOD_BAGS SET status = 'RESERVED' WHERE bag_id = ?")) {
-                        pUpd.setString(1, bagId);
-                        pUpd.executeUpdate();
-                    }
-
-                    // Insert ALLOCATIONS
-                    try (PreparedStatement pAlloc = conn.prepareStatement("INSERT INTO ALLOCATIONS (allocation_id, request_id, bag_id, allocated_at) VALUES (?, ?, ?, SYSTIMESTAMP)")) {
-                        pAlloc.setString(1, allocId);
-                        pAlloc.setString(2, requestId);
-                        pAlloc.setString(3, bagId);
-                        pAlloc.executeUpdate();
-                    }
-
-                    // Insert BAG_STATUS_LOG
-                    try (PreparedStatement pLog = conn.prepareStatement(
-                        "INSERT INTO BAG_STATUS_LOG (bag_id, old_status, new_status, changed_at, reason) " +
-                        "VALUES (?, 'AVAILABLE', 'RESERVED', SYSTIMESTAMP, ?)")) {
-                        pLog.setString(1, bagId);
-                        pLog.setString(2, "Emergency Allocation for " + requestId + " (" + priority + ")");
-                        pLog.executeUpdate();
-                    }
-
-                    allocatedBagIds.add(bagId);
-                }
-
-                // Determine final request status
-                if (allocatedBagIds.size() == unitsRequested) {
-                    finalStatus = "FULFILLED";
-                    message = "All " + unitsRequested + " units successfully matched & reserved via FEFO.";
-                } else if (!allocatedBagIds.isEmpty()) {
-                    finalStatus = "PARTIALLY_FILLED";
-                    message = "Partial fulfillment: " + allocatedBagIds.size() + " of " + unitsRequested + " units allocated.";
-                } else {
-                    finalStatus = "PENDING";
-                    message = "No matching available blood units found. Request remains PENDING.";
-                }
-
-                try (PreparedStatement pStat = conn.prepareStatement("UPDATE REQUESTS SET status = ? WHERE request_id = ?")) {
-                    pStat.setString(1, finalStatus);
-                    pStat.setString(2, requestId);
-                    pStat.executeUpdate();
-                }
-
-                conn.commit();
-
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("request_id", requestId);
-                result.put("hospital_id", hospitalId);
-                result.put("blood_group", bloodGroup);
-                result.put("rh_factor", rhFactor);
-                result.put("units_requested", unitsRequested);
-                result.put("units_allocated", allocatedBagIds.size());
-                result.put("priority", priority);
-                result.put("status", finalStatus);
-                result.put("allocated_bags", allocatedBagIds);
-                result.put("message", message);
-                result.put("timestamp", LocalDateTime.now().toString());
-                return result;
-
-            } catch (SQLException ex) {
-                if (conn != null) conn.rollback();
-                throw ex;
-            } finally {
-                if (conn != null) conn.setAutoCommit(true);
-            }
-        }
-
-        // 2. In-Memory Transaction Fallback
-        InventoryDao invDao = new InventoryDao();
-        Map<String, Object> dashboard = invDao.getInventoryDashboard(null);
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> items = (List<Map<String, Object>>) dashboard.get("inventory_items");
-
-        if (items != null) {
-            for (Map<String, Object> item : items) {
-                if (allocatedBagIds.size() >= unitsRequested) break;
-                String bg = (String) item.get("blood_group");
-                String rh = (String) item.get("rh_factor");
-                String st = (String) item.get("status");
-
-                if (bloodGroup.equalsIgnoreCase(bg) && rhFactor.equalsIgnoreCase(rh) && "AVAILABLE".equalsIgnoreCase(st)) {
-                    String bagId = (String) item.get("bag_id");
-                    item.put("status", "RESERVED"); // update in memory
-                    allocatedBagIds.add(bagId);
-
-                    Map<String, Object> logEntry = new LinkedHashMap<>();
-                    logEntry.put("bag_id", bagId);
-                    logEntry.put("old_status", "AVAILABLE");
-                    logEntry.put("new_status", "RESERVED");
-                    logEntry.put("changed_at", LocalDateTime.now().toString());
-                    logEntry.put("reason", "Allocated to emergency request " + requestId);
-                    IN_MEMORY_STATUS_LOGS.add(logEntry);
-                }
-            }
-        }
-
-        if (allocatedBagIds.size() == unitsRequested) {
-            finalStatus = "FULFILLED";
-            message = "All " + unitsRequested + " units successfully allocated via FEFO matching.";
-        } else if (!allocatedBagIds.isEmpty()) {
-            finalStatus = "PARTIALLY_FILLED";
-            message = "Partial fulfillment: " + allocatedBagIds.size() + " of " + unitsRequested + " units allocated.";
-        } else {
-            finalStatus = "PENDING";
-            message = "Zero matching available blood bags in network. Request placed in PENDING queue.";
-        }
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("request_id", requestId);
-        result.put("hospital_id", hospitalId);
-        result.put("blood_group", bloodGroup);
-        result.put("rh_factor", rhFactor);
-        result.put("units_requested", unitsRequested);
-        result.put("units_allocated", allocatedBagIds.size());
-        result.put("priority", priority);
-        result.put("status", finalStatus);
-        result.put("allocated_bags", allocatedBagIds);
-        result.put("message", message);
-        result.put("timestamp", LocalDateTime.now().toString());
-        IN_MEMORY_REQUESTS.add(result);
-
-        return result;
+public final class EmergencyRequestDao {
+ public Map<String,Object> create(Map<String,Object> body,long userId) throws SQLException {
+  String group=Data.group(Data.text(body,"blood_group",2),Data.text(body,"rh_factor",1));
+  String priority=Data.priority(Data.text(body,"priority",20));int units=Data.integer(body.get("units_requested"),1,999,"units_requested");
+  try(Connection c=DatabaseConnection.getConnection()) {
+   c.setAutoCommit(false);
+   try {
+    Map<String,Object> user=AuthDao.current(c,userId);long hospital=Data.staffHospital(user);
+    // React supplies no patient identity: this is explicitly a hospital stock requirement.
+    long id=Data.next(c,"seq_request");
+    try(PreparedStatement s=c.prepareStatement("INSERT INTO request(request_id,requester_user_id,patient_name,contact_phone,blood_group,units_required,priority,hospital_id,status,remarks) VALUES(?,?,?,?,?,?,?,?,'PENDING',?)")) {
+     s.setLong(1,id);s.setLong(2,userId);s.setString(3,"Hospital stock request");s.setString(4,(String)user.get("phone"));s.setString(5,group);s.setInt(6,units);s.setString(7,priority);s.setLong(8,hospital);s.setString(9,"Hospital stock requirement; patient identity not collected by React.");s.executeUpdate();
     }
+    Map<String,Object> result=Data.map("request",request(c,id,user));c.commit();return result;
+   } catch(SQLException|RuntimeException e) {Data.rollback(c,e);throw e;}
+  }
+ }
+ public Map<String,Object> allocations(long id,long userId,boolean dispatch) throws SQLException {
+  try(Connection c=DatabaseConnection.getConnection()) {
+   c.setAutoCommit(false);
+   try {
+    Map<String,Object> user=AuthDao.current(c,userId);request(c,id,user);
+    String outcome=null,message=null;
+    if(dispatch) {
+     long hospital=Data.staffHospital(user);
+     try(CallableStatement s=c.prepareCall("{call PRC_EMERGENCY_DISPATCH(?,?,?,?,?,?,?,?)}")) {
+      s.setLong(1,id);s.setString(2,"USER:"+userId);s.setLong(3,hospital);s.setString(4,"Y");
+      s.registerOutParameter(5,Types.VARCHAR);s.registerOutParameter(6,Types.NUMERIC);s.registerOutParameter(7,Types.NUMERIC);s.registerOutParameter(8,Types.VARCHAR);
+      s.execute();outcome=s.getString(5);message=s.getString(8);
+      if(!Arrays.asList("SUCCESS","PARTIAL","INSUFFICIENT_STOCK").contains(outcome))
+       throw new ApiException(outcomeStatus(outcome),"DISPATCH_"+outcome,"Dispatch refused: "+outcome);
+     }
+    }
+    List<Map<String,Object>> allocations=new ArrayList<>();
+    try(PreparedStatement s=c.prepareStatement("SELECT allocation_id,bag_id,bag_code,blood_group,expiry_date,allocation_status,bag_status FROM v_request_allocation_detail WHERE request_id=? ORDER BY allocation_id")) {
+     s.setLong(1,id);try(ResultSet r=s.executeQuery()) {while(r.next()) allocations.add(Data.map("allocation_id",r.getLong("allocation_id"),"bag_id",r.getLong("bag_id"),"bag_code",r.getString("bag_code"),"blood_group",r.getString("blood_group"),"expiry_date",Data.date(r,"expiry_date"),"allocation_status",r.getString("allocation_status"),"bag_status",r.getString("bag_status")));}
+    }
+    Map<String,Object> result=Data.map("request",request(c,id,user),"allocations",allocations);
+    if(dispatch) {result.put("outcome",outcome);result.put("message",message);}
+    c.commit();return result;
+   } catch(SQLException|RuntimeException e) {Data.rollback(c,e);throw e;}
+  }
+ }
+ public static int outcomeStatus(String outcome) {
+  if("NOT_FOUND".equals(outcome))return 404;
+  if("NOT_AUTHORIZED".equals(outcome))return 403;
+  if("NOT_ELIGIBLE".equals(outcome)||"BUSY".equals(outcome))return 409;
+  if(Arrays.asList("INVALID_QUANTITY","INVALID_HOSPITAL","INVALID_PARAMETER").contains(outcome))return 422;
+  return 500;
+ }
+ private Map<String,Object> request(Connection c,long id,Map<String,Object> user) throws SQLException {
+  boolean staff="HOSPITAL_STAFF".equals(user.get("role"));
+  try(PreparedStatement s=c.prepareStatement("SELECT request_id,hospital_id,blood_group,units_required,units_allocated,status,priority FROM request WHERE request_id=? AND "+(staff?"hospital_id=?":"requester_user_id=?"))) {
+   s.setLong(1,id);s.setLong(2,staff?Data.staffHospital(user):((Number)user.get("user_id")).longValue());
+   try(ResultSet r=s.executeQuery()) {
+    if(!r.next()) throw new ApiException(404,"REQUEST_NOT_FOUND","Request not found or inaccessible");
+    String group=r.getString("blood_group");return Data.map("request_id",r.getLong("request_id"),"hospital_id",r.getLong("hospital_id"),"blood_group",group.substring(0,group.length()-1),"rh_factor",group.substring(group.length()-1),"units_requested",r.getInt("units_required"),"units_allocated",r.getInt("units_allocated"),"request_status",r.getString("status"),"priority",r.getString("priority"));
+   }
+  }
+ }
 }

@@ -1,627 +1,184 @@
 package com.bloodbank.server;
-
+import com.bloodbank.config.DatabaseConnection;
 import com.bloodbank.dao.*;
-import com.bloodbank.util.GeoUtils;
-import com.bloodbank.util.JsonUtil;
-import com.sun.net.httpserver.Headers;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
-
+import com.bloodbank.util.*;
+import com.sun.net.httpserver.*;
 import java.io.*;
-import java.net.InetSocketAddress;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.time.LocalDate;
+import java.net.*;
+import java.nio.*;
+import java.nio.charset.*;
+import java.security.*;
+import java.sql.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
-/**
- * High-Performance, Zero-Dependency REST API Server for Blood Bank & Emergency Routing.
- * Fully connects React Frontend with Oracle SQL & JDBC.
- * Supports both React frontend client contract and Member 3 evaluation endpoints.
- */
-public class BloodBankServer {
-
-    private static final int PORT = 8080;
-    private static final AuthDao authDao = new AuthDao();
-    private static final HospitalDao hospitalDao = new HospitalDao();
-    private static final InventoryDao inventoryDao = new InventoryDao();
-    private static final EmergencyRequestDao emergencyDao = new EmergencyRequestDao();
-    private static final DonorDao donorDao = new DonorDao();
-
-    // Session Cookie Store: sessionId -> User Map
-    private static final Map<String, Map<String, Object>> ACTIVE_SESSIONS = new ConcurrentHashMap<>();
-    private static final String DEFAULT_CSRF = "csrf-token-secured-session-88371";
-
-    public static void main(String[] args) throws IOException {
-        HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-        server.setExecutor(Executors.newFixedThreadPool(15));
-
-        // --------------------------------------------------------------------
-        // FRONTEND REACT API ROUTES (Base URL: /api)
-        // --------------------------------------------------------------------
-        server.createContext("/api/auth/me", new AuthMeHandler());
-        server.createContext("/api/auth/login", new LoginHandler());
-        server.createContext("/api/auth/register/citizen", new RegisterCitizenHandler());
-        server.createContext("/api/auth/register/hospital", new RegisterHospitalStaffHandler());
-        server.createContext("/api/auth/logout", new LogoutHandler());
-
-        server.createContext("/api/hospitals", new HospitalsDispatcher());
-        server.createContext("/api/donors", new DonorsDispatcher());
-        server.createContext("/api/requests", new RequestsDispatcher());
-
-        // --------------------------------------------------------------------
-        // MEMBER 3 SPECIFIC RUBRIC EVALUATION ENDPOINTS
-        // --------------------------------------------------------------------
-        server.createContext("/api/inventory/dashboard", new InventoryDashboardHandler());
-        server.createContext("/api/requests/emergency", new EmergencyRequestHandler());
-        server.createContext("/api/blood/search", new BloodSearchHandler());
-        server.createContext("/api/health", new HealthHandler());
-
-        // Root landing handler for browser navigation
-        server.createContext("/", exchange -> {
-            applyCors(exchange);
-            String html = "<!DOCTYPE html><html><head><title>Blood Bank API Server</title></head>"
-                + "<body style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#f8fafc;padding:40px;line-height:1.6;'>"
-                + "<div style='max-width:700px;margin:0 auto;background:#1e293b;padding:32px;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.5);border:1px solid #334155;'>"
-                + "<h1 style='color:#ef4444;margin-top:0;'>🩸 Blood Bank Backend API</h1>"
-                + "<p style='color:#94a3b8;'>BACSE202 Database Systems &bull; <strong>Member 3 (Java Backend & JDBC)</strong></p>"
-                + "<div style='background:#14532d;border:1px solid #22c55e;color:#86efac;padding:12px 16px;border-radius:8px;font-weight:bold;margin:20px 0;'>"
-                + "&#10004; SERVER STATUS: ONLINE & CONNECTED TO ORACLE 21c (PORT 1521)"
-                + "</div>"
-                + "<h3 style='color:#e2e8f0;margin-bottom:12px;'>Explore Live Database Endpoints:</h3>"
-                + "<ul style='list-style:none;padding:0;'>"
-                + "<li style='margin-bottom:12px;'><a style='color:#38bdf8;text-decoration:none;font-weight:bold;background:#0f172a;padding:8px 14px;border-radius:6px;display:inline-block;border:1px solid #38bdf8;' href='/api/hospitals/nearby?pincode=560001&radius=50' target='_blank'>&rarr; GET /api/hospitals/nearby?pincode=560001</a><br><small style='color:#94a3b8;margin-left:8px;'>Fetches nearby hospitals and available blood bags live from Oracle XE</small></li>"
-                + "<li style='margin-bottom:12px;'><a style='color:#38bdf8;text-decoration:none;font-weight:bold;background:#0f172a;padding:8px 14px;border-radius:6px;display:inline-block;border:1px solid #38bdf8;' href='/api/inventory/dashboard?hospitalId=HOSP-01' target='_blank'>&rarr; GET /api/inventory/dashboard?hospitalId=HOSP-01</a><br><small style='color:#94a3b8;margin-left:8px;'>Hospital stock and inventory status breakdown</small></li>"
-                + "<li style='margin-bottom:12px;'><a style='color:#38bdf8;text-decoration:none;font-weight:bold;background:#0f172a;padding:8px 14px;border-radius:6px;display:inline-block;border:1px solid #38bdf8;' href='/api/health' target='_blank'>&rarr; GET /api/health</a><br><small style='color:#94a3b8;margin-left:8px;'>System health and Oracle connection check</small></li>"
-                + "</ul>"
-                + "</div></body></html>";
-            byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
-        });
-
-        System.out.println("=================================================================");
-        System.out.println(" CENTRALIZED BLOOD BANK & EMERGENCY ROUTING BACKEND");
-        System.out.println(" BACSE202 Course Project — Member 3 (Java Backend & JDBC)");
-        System.out.println(" Running on: http://127.0.0.1:" + PORT);
-        System.out.println(" CORS Enabled for React Frontend: http://localhost:5173 & http://127.0.0.1:5173");
-        System.out.println("=================================================================");
-        System.out.println("Core Endpoints Active:");
-        System.out.println(" • GET  /api/auth/me");
-        System.out.println(" • POST /api/auth/login");
-        System.out.println(" • POST /api/auth/register/citizen");
-        System.out.println(" • POST /api/auth/register/hospital");
-        System.out.println(" • GET  /api/hospitals");
-        System.out.println(" • GET  /api/hospitals/nearby?pincode=560001&radius=25");
-        System.out.println(" • GET  /api/hospitals/:id/inventory");
-        System.out.println(" • GET  /api/inventory/dashboard?hospitalId=HOSP-01");
-        System.out.println(" • POST /api/requests (Emergency demand)");
-        System.out.println(" • POST /api/requests/emergency (FEFO 4-table matching)");
-        System.out.println(" • POST /api/requests/:id/allocations");
-        System.out.println(" • POST /api/donors");
-        System.out.println(" • GET  /api/blood/search?bloodGroup=O&rhFactor=%2B");
-        System.out.println(" • GET  /api/health");
-        System.out.println("=================================================================");
-
-        server.start();
-
-        try {
-            Thread.currentThread().join();
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
-        }
+/** Java/JDBC is the only application backend. No inventory or authentication simulations. */
+public final class BloodBankServer {
+ private static final AuthDao AUTH=new AuthDao();
+ private static final HospitalDao HOSPITALS=new HospitalDao();
+ private static final InventoryDao INVENTORY=new InventoryDao();
+ private static final DonorDao DONORS=new DonorDao();
+ private static final EmergencyRequestDao REQUESTS=new EmergencyRequestDao();
+ private static final Map<String,Session> SESSIONS=new ConcurrentHashMap<>();
+ private static final SecureRandom RANDOM=new SecureRandom();
+ private static final Set<String> ORIGINS=new HashSet<>(Arrays.asList(System.getenv().getOrDefault("CORS_ORIGINS","http://localhost:5173,http://127.0.0.1:5173").split(",")));
+ private static final boolean SECURE=Boolean.parseBoolean(System.getenv().getOrDefault("COOKIE_SECURE","false"));
+ private static final String COOKIE="blood_bank_session";
+ private static final Map<String,Attempt> ATTEMPTS=new ConcurrentHashMap<>();
+ private static final class Attempt {long start=System.currentTimeMillis();int count;}
+ private static final class Session {
+  final String id=token(),csrf=token();final Long userId;final long expires;
+  Session(Long userId){this.userId=userId;expires=System.currentTimeMillis()+(userId==null?1800000L:28800000L);}
+ }
+ private static String token(){byte[] b=new byte[32];RANDOM.nextBytes(b);return Base64.getUrlEncoder().withoutPadding().encodeToString(b);}
+ public static void main(String[] args) throws IOException {
+  int port=Integer.parseInt(System.getenv().getOrDefault("PORT","8080"));
+  HttpServer server=HttpServer.create(new InetSocketAddress(System.getenv().getOrDefault("BIND_ADDRESS","127.0.0.1"),port),64);
+  ThreadPoolExecutor pool=new ThreadPoolExecutor(4,16,60,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(128),new ThreadPoolExecutor.CallerRunsPolicy());
+  server.setExecutor(pool);server.createContext("/",BloodBankServer::handle);
+  Runtime.getRuntime().addShutdownHook(new Thread(()->{server.stop(1);pool.shutdownNow();}));
+  server.start();System.out.println("Java blood bank API listening on port "+port+". Oracle connectivity must be checked at /api/health.");
+ }
+ private static void handle(HttpExchange x) throws IOException {
+  try {
+   String origin=x.getRequestHeaders().getFirst("Origin");
+   x.getResponseHeaders().set("Vary","Origin");x.getResponseHeaders().set("Cache-Control","no-store");x.getResponseHeaders().set("X-Content-Type-Options","nosniff");
+   if(origin!=null) {
+    if(!ORIGINS.contains(origin))throw new ApiException(403,"ORIGIN_DENIED","Origin is not allowed");
+    x.getResponseHeaders().set("Access-Control-Allow-Origin",origin);x.getResponseHeaders().set("Access-Control-Allow-Credentials","true");
+   }
+   if("OPTIONS".equals(x.getRequestMethod())) {
+    x.getResponseHeaders().set("Access-Control-Allow-Methods","GET, POST, OPTIONS");
+    x.getResponseHeaders().set("Access-Control-Allow-Headers","Content-Type, X-CSRF-Token");
+    x.sendResponseHeaders(204,-1);return;
+   }
+   String path=x.getRequestURI().getPath(),method=x.getRequestMethod();
+   String allowed=methods(path);
+   if(allowed==null)throw new ApiException(404,"NOT_FOUND","Endpoint not found");
+   if(!Arrays.asList(allowed.split(", ")).contains(method)) {x.getResponseHeaders().set("Allow",allowed);throw new ApiException(405,"METHOD_NOT_ALLOWED","Method not allowed");}
+   Session session=session(x);
+   if(path.equals("/api/auth/me")) {
+    if(session==null)session=createSession(x,null);
+    Map<String,Object> user=session.userId==null?null:AUTH.current(session.userId);
+    if(user!=null && !Arrays.asList("CITIZEN","HOSPITAL_STAFF").contains(user.get("role")))throw new ApiException(403,"ROLE_DENIED","This portal supports citizen and hospital staff accounts");
+    send(x,user==null?401:200,Data.map("user",user,"csrf_token",session.csrf));return;
+   }
+   if(path.equals("/api/health")) {
+    try(Connection c=DatabaseConnection.getConnection()) {
+     if(!c.isValid(3))throw new SQLNonTransientConnectionException("Oracle connection validation failed","08001");
+     send(x,200,Data.map("status","UP","database_connected",true));return;
     }
-
-    // ========================================================================
-    // CORS & HTTP UTILITIES
-    // ========================================================================
-
-    private static void applyCors(HttpExchange exchange) {
-        Headers headers = exchange.getResponseHeaders();
-        List<String> origins = exchange.getRequestHeaders().get("Origin");
-        String origin = (origins != null && !origins.isEmpty()) ? origins.get(0) : "http://localhost:5173";
-        headers.set("Access-Control-Allow-Origin", origin);
-        headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Origin, Accept, X-CSRF-Token");
-        headers.set("Access-Control-Allow-Credentials", "true");
-        headers.set("Content-Type", "application/json; charset=UTF-8");
-    }
-
-    private static boolean handlePreflight(HttpExchange exchange) throws IOException {
-        applyCors(exchange);
-        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
-            exchange.sendResponseHeaders(204, -1);
-            exchange.close();
-            return true;
-        }
-        return false;
-    }
-
-    private static void sendJson(HttpExchange exchange, int status, Object data) throws IOException {
-        applyCors(exchange);
-        String json = JsonUtil.toJson(data);
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(status, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
-    }
-
-    private static String readBody(HttpExchange exchange) throws IOException {
-        try (InputStream is = exchange.getRequestBody();
-             Scanner scanner = new Scanner(is, StandardCharsets.UTF_8.name())) {
-            return scanner.useDelimiter("\\A").hasNext() ? scanner.next() : "";
-        }
-    }
-
-    private static Map<String, String> parseQuery(String query) {
-        Map<String, String> map = new LinkedHashMap<>();
-        if (query == null || query.isEmpty()) return map;
-        String[] pairs = query.split("&");
-        for (String pair : pairs) {
-            String[] kv = pair.split("=");
-            try {
-                String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8.name());
-                String value = kv.length > 1 ? URLDecoder.decode(kv[1], StandardCharsets.UTF_8.name()) : "";
-                map.put(key, value);
-            } catch (Exception ignored) {}
-        }
-        return map;
-    }
-
-    private static String getSessionId(HttpExchange exchange) {
-        List<String> cookieHeaders = exchange.getRequestHeaders().get("Cookie");
-        if (cookieHeaders != null) {
-            for (String header : cookieHeaders) {
-                String[] cookies = header.split(";");
-                for (String c : cookies) {
-                    String[] kv = c.trim().split("=");
-                    if (kv.length == 2 && "blood_bank_session".equalsIgnoreCase(kv[0].trim())) {
-                        return kv[1].trim();
-                    }
-                }
-            }
-        }
-        return null;
-    }
-
-    // ========================================================================
-    // AUTH HANDLERS (React Frontend session contract)
-    // ========================================================================
-
-    static class AuthMeHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            String sid = getSessionId(exchange);
-            Map<String, Object> user = sid != null ? ACTIVE_SESSIONS.get(sid) : null;
-
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("csrf_token", DEFAULT_CSRF);
-
-            if (user != null) {
-                resp.put("user", user);
-                sendJson(exchange, 200, resp);
-            } else {
-                resp.put("user", null);
-                // Return 401 with csrf_token as expected by frontend authClient
-                sendJson(exchange, 401, resp);
-            }
-        }
-    }
-
-    static class LoginHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                sendJson(exchange, 405, Collections.singletonMap("error", "Method not allowed"));
-                return;
-            }
-
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String email = (String) req.get("email");
-                String password = (String) req.get("password");
-                String role = (String) req.get("role");
-
-                if (email == null || password == null) {
-                    sendJson(exchange, 400, Collections.singletonMap("error", "Email and password required"));
-                    return;
-                }
-
-                Map<String, Object> authUser = authDao.authenticate(email, password);
-                if (authUser == null) {
-                    sendJson(exchange, 401, Collections.singletonMap("error", "Invalid email or password"));
-                    return;
-                }
-
-                if (role != null && !role.equalsIgnoreCase((String) authUser.get("role"))) {
-                    sendJson(exchange, 401, Collections.singletonMap("error", "Role mismatch for user account"));
-                    return;
-                }
-
-                // Format user object matching frontend expectations
-                Map<String, Object> sessionUser = new LinkedHashMap<>();
-                sessionUser.put("user_id", authUser.get("user_id"));
-                sessionUser.put("email", authUser.get("email"));
-                sessionUser.put("full_name", authUser.get("full_name"));
-                sessionUser.put("role", authUser.get("role"));
-                sessionUser.put("status", "ACTIVE");
-                sessionUser.put("hospital_id", authUser.get("hospital_id"));
-                sessionUser.put("hospital_name", authUser.get("hospital_name"));
-
-                String sid = "SESS-" + UUID.randomUUID().toString();
-                ACTIVE_SESSIONS.put(sid, sessionUser);
-
-                // Set HttpOnly session cookie
-                exchange.getResponseHeaders().add("Set-Cookie", "blood_bank_session=" + sid + "; Path=/; HttpOnly; SameSite=Lax");
-
-                Map<String, Object> resp = new LinkedHashMap<>();
-                resp.put("csrf_token", DEFAULT_CSRF);
-                resp.put("user", sessionUser);
-                resp.put("status", "SUCCESS");
-                sendJson(exchange, 200, resp);
-
-            } catch (Exception e) {
-                sendJson(exchange, 500, Collections.singletonMap("error", e.getMessage()));
-            }
-        }
-    }
-
-    static class RegisterCitizenHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String email = (String) req.get("email");
-                String pass = (String) req.get("password");
-                String name = (String) req.get("full_name");
-                String phone = (String) req.get("phone");
-
-                authDao.registerCitizen(email, pass, name, phone);
-
-                Map<String, Object> resp = new LinkedHashMap<>();
-                resp.put("status", "REGISTERED");
-                resp.put("message", "Citizen registration successful");
-                sendJson(exchange, 201, resp);
-            } catch (Exception e) {
-                sendJson(exchange, 400, Collections.singletonMap("error", e.getMessage()));
-            }
-        }
-    }
-
-    static class RegisterHospitalStaffHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String email = (String) req.get("email");
-                String pass = (String) req.get("password");
-                String name = (String) req.get("full_name");
-                String phone = (String) req.get("phone");
-                String hospId = (String) req.get("hospital_id");
-
-                authDao.registerHospitalStaff(email, pass, name, phone, hospId);
-
-                Map<String, Object> resp = new LinkedHashMap<>();
-                resp.put("status", "PENDING_APPROVAL");
-                resp.put("message", "Hospital staff registration submitted for approval");
-                sendJson(exchange, 201, resp);
-            } catch (Exception e) {
-                sendJson(exchange, 400, Collections.singletonMap("error", e.getMessage()));
-            }
-        }
-    }
-
-    static class LogoutHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            String sid = getSessionId(exchange);
-            if (sid != null) ACTIVE_SESSIONS.remove(sid);
-            exchange.getResponseHeaders().add("Set-Cookie", "blood_bank_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
-            sendJson(exchange, 200, Collections.singletonMap("status", "LOGGED_OUT"));
-        }
-    }
-
-    // ========================================================================
-    // HOSPITALS & INVENTORY DISPATCHER
-    // ========================================================================
-    static class HospitalsDispatcher implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            String path = exchange.getRequestURI().getPath(); // e.g. /api/hospitals, /api/hospitals/nearby, /api/hospitals/:id/inventory
-
-            if ("/api/hospitals/nearby".equalsIgnoreCase(path)) {
-                handleNearby(exchange);
-            } else if (path.matches("^/api/hospitals/[^/]+/inventory$")) {
-                handleInventory(exchange, path);
-            } else {
-                handleAllHospitals(exchange);
-            }
-        }
-
-        private void handleAllHospitals(HttpExchange exchange) throws IOException {
-            List<Map<String, Object>> list = hospitalDao.getAllHospitals();
-            List<Map<String, Object>> resp = new ArrayList<>();
-            for (Map<String, Object> h : list) {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("hospital_id", h.get("hospital_id"));
-                item.put("name", h.get("name"));
-                item.put("address", h.get("address"));
-                item.put("phone", h.get("phone"));
-                item.put("latitude", h.get("latitude"));
-                item.put("longitude", h.get("longitude"));
-                resp.add(item);
-            }
-            sendJson(exchange, 200, resp);
-        }
-
-        private void handleNearby(HttpExchange exchange) throws IOException {
-            Map<String, String> q = parseQuery(exchange.getRequestURI().getQuery());
-            String pin = q.get("pincode");
-            Double lat = q.containsKey("lat") ? Double.parseDouble(q.get("lat")) : null;
-            Double lon = q.containsKey("lon") ? Double.parseDouble(q.get("lon")) : null;
-            Double rad = q.containsKey("radius") ? Double.parseDouble(q.get("radius")) : 50.0;
-
-            List<Map<String, Object>> results = hospitalDao.getNearbyHospitals(lat, lon, pin, rad);
-            List<Map<String, Object>> formatted = new ArrayList<>();
-
-            for (Map<String, Object> row : results) {
-                Map<String, Object> hospObj = new LinkedHashMap<>();
-                hospObj.put("hospital_id", row.get("hospital_id"));
-                hospObj.put("name", row.get("name"));
-                hospObj.put("address", row.get("address"));
-                hospObj.put("phone", row.get("phone"));
-                hospObj.put("latitude", row.get("latitude"));
-                hospObj.put("longitude", row.get("longitude"));
-
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("hospital", hospObj);
-                entry.put("distance_km", row.get("distance_km"));
-                entry.put("available_units", row.get("available_units"));
-                formatted.add(entry);
-            }
-
-            Map<String, Object> res = new LinkedHashMap<>();
-            res.put("hospitals", formatted);
-            sendJson(exchange, 200, res);
-        }
-
-        private void handleInventory(HttpExchange exchange, String path) throws IOException {
-            String[] parts = path.split("/");
-            String hospId = parts[3]; // /api/hospitals/{hospId}/inventory
-
-            Map<String, Object> dash = inventoryDao.getInventoryDashboard(hospId);
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> items = (List<Map<String, Object>>) dash.get("inventory_items");
-
-            List<Map<String, Object>> bags = new ArrayList<>();
-            if (items != null) {
-                for (Map<String, Object> it : items) {
-                    Map<String, Object> b = new LinkedHashMap<>();
-                    b.put("bag_id", it.get("bag_id"));
-                    b.put("blood_group", it.get("blood_group"));
-                    b.put("rh_factor", it.get("rh_factor"));
-                    b.put("expiry_date", it.get("expiry_date"));
-                    b.put("bag_status", it.get("status"));
-                    bags.add(b);
-                }
-            }
-
-            Map<String, Object> res = new LinkedHashMap<>();
-            res.put("as_of_date", LocalDate.now().toString());
-            res.put("near_expiry_days", 7);
-            res.put("bags", bags);
-            sendJson(exchange, 200, res);
-        }
-    }
-
-    // ========================================================================
-    // DONORS DISPATCHER
-    // ========================================================================
-    static class DonorsDispatcher implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                sendJson(exchange, 405, Collections.singletonMap("error", "POST required"));
-                return;
-            }
-
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String fullName = (String) req.get("full_name");
-                String bg = (String) req.get("blood_group");
-                String rh = (String) req.get("rh_factor");
-                int age = req.get("age") instanceof Number ? ((Number) req.get("age")).intValue() : 25;
-                String gender = (String) req.getOrDefault("gender", "M");
-                String contact = (String) req.get("contact_number");
-                String ldd = (String) req.get("last_donation_date");
-
-                Map<String, Object> donor = donorDao.registerDonor(fullName, bg, rh, age, gender, contact, ldd);
-                Map<String, Object> resp = new LinkedHashMap<>();
-                resp.put("donor", donor);
-                sendJson(exchange, 201, resp);
-            } catch (Exception e) {
-                sendJson(exchange, 400, Collections.singletonMap("error", e.getMessage()));
-            }
-        }
-    }
-
-    // ========================================================================
-    // REQUESTS & ALLOCATIONS DISPATCHER
-    // ========================================================================
-    static class RequestsDispatcher implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            String path = exchange.getRequestURI().getPath();
-
-            if (path.matches("^/api/requests/[^/]+/allocations$")) {
-                handleAllocate(exchange, path);
-            } else if ("/api/requests/emergency".equalsIgnoreCase(path)) {
-                handleEmergencyDirect(exchange);
-            } else {
-                handleCreateRequest(exchange);
-            }
-        }
-
-        private void handleCreateRequest(HttpExchange exchange) throws IOException {
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String hId = (String) req.get("hospital_id");
-                String bg = (String) req.get("blood_group");
-                String rh = (String) req.get("rh_factor");
-                int units = req.get("units_requested") instanceof Number ? ((Number) req.get("units_requested")).intValue() : 1;
-                String prio = (String) req.getOrDefault("priority", "CRITICAL");
-
-                Map<String, Object> res = emergencyDao.createEmergencyRequest(hId, bg, rh, units, prio);
-
-                Map<String, Object> reqObj = new LinkedHashMap<>();
-                reqObj.put("request_id", res.get("request_id"));
-                reqObj.put("request_status", res.get("status"));
-                reqObj.put("hospital_id", res.get("hospital_id"));
-                reqObj.put("blood_group", res.get("blood_group"));
-                reqObj.put("rh_factor", res.get("rh_factor"));
-                reqObj.put("units_requested", res.get("units_requested"));
-
-                Map<String, Object> resp = new LinkedHashMap<>();
-                resp.put("request", reqObj);
-                sendJson(exchange, 201, resp);
-            } catch (Exception e) {
-                sendJson(exchange, 400, Collections.singletonMap("error", e.getMessage()));
-            }
-        }
-
-        private void handleAllocate(HttpExchange exchange, String path) throws IOException {
-            String[] parts = path.split("/");
-            String reqId = parts[3];
-
-            Map<String, Object> reqObj = new LinkedHashMap<>();
-            reqObj.put("request_id", reqId);
-            reqObj.put("request_status", "FULFILLED");
-
-            List<Map<String, Object>> allocs = new ArrayList<>();
-            Map<String, Object> a1 = new LinkedHashMap<>();
-            a1.put("allocation_id", "ALC-" + (System.currentTimeMillis() % 10000));
-            a1.put("bag_id", "BAG-101");
-            allocs.add(a1);
-
-            Map<String, Object> resp = new LinkedHashMap<>();
-            resp.put("request", reqObj);
-            resp.put("allocations", allocs);
-            sendJson(exchange, 200, resp);
-        }
-
-        private void handleEmergencyDirect(HttpExchange exchange) throws IOException {
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String hId = (String) req.get("hospital_id");
-                String bg = (String) req.get("blood_group");
-                String rh = (String) req.get("rh_factor");
-                int units = req.get("units_requested") instanceof Number ? ((Number) req.get("units_requested")).intValue() : 1;
-                String prio = (String) req.getOrDefault("priority", "CRITICAL");
-
-                Map<String, Object> res = emergencyDao.createEmergencyRequest(hId, bg, rh, units, prio);
-                sendJson(exchange, 200, res);
-            } catch (Exception e) {
-                sendJson(exchange, 400, Collections.singletonMap("error", e.getMessage()));
-            }
-        }
-    }
-
-    // ========================================================================
-    // MEMBER 3 EVALUATION HANDLERS
-    // ========================================================================
-
-    static class InventoryDashboardHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            Map<String, String> q = parseQuery(exchange.getRequestURI().getQuery());
-            String hospId = q.get("hospitalId");
-            Map<String, Object> dash = inventoryDao.getInventoryDashboard(hospId);
-
-            Map<String, Object> envelope = new LinkedHashMap<>();
-            envelope.put("success", true);
-            envelope.put("message", "Live inventory metrics loaded");
-            envelope.put("data", dash);
-            sendJson(exchange, 200, envelope);
-        }
-    }
-
-    static class EmergencyRequestHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            try {
-                String body = readBody(exchange);
-                Map<String, Object> req = JsonUtil.parseJsonObject(body);
-                String hId = (String) req.get("hospital_id");
-                String bg = (String) req.get("blood_group");
-                String rh = (String) req.get("rh_factor");
-                int units = req.get("units_requested") instanceof Number ? ((Number) req.get("units_requested")).intValue() : 1;
-                String prio = (String) req.getOrDefault("priority", "CRITICAL");
-
-                Map<String, Object> res = emergencyDao.createEmergencyRequest(hId, bg, rh, units, prio);
-
-                Map<String, Object> envelope = new LinkedHashMap<>();
-                envelope.put("success", true);
-                envelope.put("message", res.get("message"));
-                envelope.put("data", res);
-                sendJson(exchange, 200, envelope);
-            } catch (Exception e) {
-                Map<String, Object> err = new LinkedHashMap<>();
-                err.put("success", false);
-                err.put("message", e.getMessage());
-                sendJson(exchange, 400, err);
-            }
-        }
-    }
-
-    static class BloodSearchHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            Map<String, String> q = parseQuery(exchange.getRequestURI().getQuery());
-            String bg = q.get("bloodGroup");
-            String rh = q.get("rhFactor");
-            String pin = q.get("pincode");
-            Double rad = q.containsKey("radius") ? Double.parseDouble(q.get("radius")) : 30.0;
-
-            List<Map<String, Object>> matches = donorDao.searchAvailableBlood(bg, rh, pin, rad);
-            Map<String, Object> envelope = new LinkedHashMap<>();
-            envelope.put("success", true);
-            envelope.put("results", matches);
-            sendJson(exchange, 200, envelope);
-        }
-    }
-
-    static class HealthHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            if (handlePreflight(exchange)) return;
-            Map<String, Object> h = new LinkedHashMap<>();
-            h.put("status", "UP");
-            h.put("service", "Centralized Blood Bank Backend");
-            h.put("port", PORT);
-            h.put("database_connected", com.bloodbank.config.DatabaseConnection.isConnected());
-            sendJson(exchange, 200, h);
-        }
-    }
+   }
+   boolean protectedRoute=path.equals("/api/donors")||path.startsWith("/api/requests")||path.equals("/api/inventory/dashboard")||path.matches("/api/hospitals/[1-9][0-9]{0,9}/inventory");
+   Map<String,Object> user=protectedRoute?requireUser(session):null;
+   if(method.equals("POST"))csrf(x,session);
+   if(path.equals("/api/auth/logout")) {
+    if(session!=null)SESSIONS.remove(session.id);cookie(x,"",0);send(x,200,Data.map("status","LOGGED_OUT"));return;
+   }
+   if(path.equals("/api/auth/login")) {
+    limitLogin(x);Map<String,Object> b=body(x);
+    String email=Data.text(b,"email",254),password=password(b),role=Data.text(b,"role",20);
+    if(!Arrays.asList("CITIZEN","HOSPITAL_STAFF").contains(role))throw new ApiException(400,"INVALID_ROLE","Unknown portal role");
+    Map<String,Object> authenticatedUser=AUTH.authenticate(email,password,role);
+    // Rotate the guest/session identifier after authentication.
+    if(session!=null)SESSIONS.remove(session.id);Session authenticated=createSession(x,((Number)authenticatedUser.get("user_id")).longValue());
+    send(x,200,Data.map("user",authenticatedUser,"csrf_token",authenticated.csrf));return;
+   }
+   if(path.startsWith("/api/auth/register/")) {
+    limitLogin(x);boolean staff=path.endsWith("hospital");AUTH.register(body(x),staff);
+    send(x,201,Data.map("status",staff?"PENDING_APPROVAL":"REGISTERED"));return;
+   }
+   if(path.equals("/api/hospitals")) {
+    Long hospital=null;
+    if(session!=null&&session.userId!=null) {Map<String,Object> u=AUTH.current(session.userId);if("HOSPITAL_STAFF".equals(u.get("role")))hospital=Data.staffHospital(u);}
+    send(x,200,HOSPITALS.getAllHospitals(hospital));return;
+   }
+   if(path.equals("/api/hospitals/nearby")||path.equals("/api/blood/search")) {
+    Map<String,String> q=query(x);String group=q.getOrDefault("blood_group",q.get("bloodGroup")),rh=q.getOrDefault("rh_factor",q.get("rhFactor"));
+    String recipient=(group==null&&rh==null)?null:Data.group(group,rh);
+    Double lat=decimal(q.get("lat")),lon=decimal(q.get("lon"));Double radius=decimal(q.get("radius"));
+    List<Map<String,Object>> rows=HOSPITALS.nearby(q.get("pincode"),lat,lon,radius==null?50:radius,recipient);
+    send(x,200,Data.map("hospitals",rows));return;
+   }
+   if(path.matches("/api/hospitals/[1-9][0-9]{0,9}/inventory")||path.equals("/api/inventory/dashboard")) {
+    long hospital=Data.staffHospital(user); // Client hospital IDs never choose the scope.
+    send(x,200,INVENTORY.inventory(hospital));return;
+   }
+   if(path.equals("/api/donors")) {
+    if(!"CITIZEN".equals(user.get("role")))throw new ApiException(403,"CITIZEN_REQUIRED","Citizen access is required");
+    send(x,201,DONORS.register(body(x)));return;
+   }
+   if(path.equals("/api/requests")||path.equals("/api/requests/emergency")) {
+    Data.staffHospital(user);send(x,201,REQUESTS.create(body(x),session.userId));return;
+   }
+   if(path.matches("/api/requests/[1-9][0-9]{0,9}/allocations")) {
+    if(method.equals("POST")) {Data.staffHospital(user);body(x);}
+    long id=Data.id(path.split("/")[3]);send(x,200,REQUESTS.allocations(id,session.userId,method.equals("POST")));return;
+   }
+   throw new ApiException(404,"NOT_FOUND","Endpoint not found");
+  } catch(ApiException e) {send(x,e.status,Data.map("error",Data.map("code",e.code,"message",e.getMessage())));}
+  catch(SQLException e) {
+   // Only server-side classification is logged; credentials, SQL text and personal data are not returned.
+   System.err.println("Oracle failure: SQLState="+e.getSQLState()+", code="+e.getErrorCode());
+   boolean unavailable=e instanceof SQLTransientConnectionException||e instanceof SQLNonTransientConnectionException||e instanceof SQLRecoverableException||(e.getSQLState()!=null&&e.getSQLState().startsWith("08"))||e.getErrorCode()==1017||e.getErrorCode()==28000;
+   int status=unavailable?503:e.getErrorCode()==1?409:e.getErrorCode()==20999?500:500;
+   send(x,status,Data.map("error",Data.map("code",unavailable?"ORACLE_UNAVAILABLE":status==409?"CONFLICT":"DATABASE_ERROR","message",unavailable?"Oracle is unavailable. Check server database configuration and connectivity.":status==409?"The record conflicts with existing data.":"Oracle could not complete the operation. Contact the administrator.")));
+  } catch(Exception e) {
+   System.err.println("API failure: "+e.getClass().getSimpleName());send(x,500,Data.map("error",Data.map("code","INTERNAL_ERROR","message","The server could not complete the operation.")));
+  } finally {x.close();}
+ }
+ private static String methods(String path) {
+  if(Arrays.asList("/api/auth/me","/api/health","/api/hospitals","/api/hospitals/nearby","/api/blood/search","/api/inventory/dashboard").contains(path)||path.matches("/api/hospitals/[1-9][0-9]{0,9}/inventory"))return "GET";
+  if(Arrays.asList("/api/auth/login","/api/auth/logout","/api/auth/register/citizen","/api/auth/register/hospital","/api/donors","/api/requests","/api/requests/emergency").contains(path))return "POST";
+  if(path.matches("/api/requests/[1-9][0-9]{0,9}/allocations"))return "GET, POST";return null;
+ }
+ private static Session session(HttpExchange x) {
+  String header=x.getRequestHeaders().getFirst("Cookie");if(header==null)return null;
+  for(String item:header.split(";")) {
+   String[] p=item.trim().split("=",2);if(p.length==2&&p[0].equals(COOKIE)) {
+    Session s=SESSIONS.get(p[1]);if(s!=null&&s.expires<=System.currentTimeMillis()){SESSIONS.remove(s.id);return null;}return s;
+   }
+  }return null;
+ }
+ private static synchronized Session createSession(HttpExchange x,Long user) {
+  SESSIONS.values().removeIf(s->s.expires<=System.currentTimeMillis());
+  if(SESSIONS.size()>=10000)throw new ApiException(503,"SESSION_CAPACITY","Session capacity reached; try again later");
+  Session s=new Session(user);SESSIONS.put(s.id,s);cookie(x,s.id,user==null?1800:28800);return s;
+ }
+ private static void cookie(HttpExchange x,String value,int age) {x.getResponseHeaders().add("Set-Cookie",COOKIE+"="+value+"; Path=/; HttpOnly; SameSite=Lax; Max-Age="+age+(SECURE?"; Secure":""));}
+ private static void csrf(HttpExchange x,Session s) {
+  String supplied=x.getRequestHeaders().getFirst("X-CSRF-Token");
+  if(s==null||supplied==null||!MessageDigest.isEqual(s.csrf.getBytes(StandardCharsets.UTF_8),supplied.getBytes(StandardCharsets.UTF_8)))throw new ApiException(403,"CSRF_INVALID","Refresh the session before submitting this action");
+ }
+ private static Map<String,Object> requireUser(Session s) throws SQLException {
+  if(s==null||s.userId==null)throw new ApiException(401,"AUTH_REQUIRED","Sign in to continue");return AUTH.current(s.userId);
+ }
+ private static String password(Map<String,Object> body) {
+  Object p=body.get("password");if(!(p instanceof String)||((String)p).isEmpty()||((String)p).length()>128)throw new ApiException(400,"INVALID_PASSWORD","Invalid password");return (String)p;
+ }
+ private static Map<String,Object> body(HttpExchange x) throws IOException {
+  String content=x.getRequestHeaders().getFirst("Content-Type");if(content==null||!content.split(";",2)[0].trim().equalsIgnoreCase("application/json"))throw new ApiException(415,"JSON_REQUIRED","Use application/json");
+  ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[1024];int n;
+  try(InputStream in=x.getRequestBody()) {while((n=in.read(buf))!=-1){if(out.size()+n>16384)throw new ApiException(413,"BODY_TOO_LARGE","JSON body exceeds 16 KiB");out.write(buf,0,n);}}
+  try {return JsonUtil.parseJsonObject(StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(out.toByteArray())).toString());}
+  catch(CharacterCodingException e) {throw new ApiException(400,"INVALID_JSON","JSON must use UTF-8");}
+ }
+ private static Map<String,String> query(HttpExchange x) {
+  Map<String,String> q=new LinkedHashMap<>();String raw=x.getRequestURI().getRawQuery();if(raw==null)return q;
+  try {for(String part:raw.split("&")){String[] pair=part.split("=",2);String key=URLDecoder.decode(pair[0],"UTF-8");if(q.containsKey(key))throw new IllegalArgumentException();q.put(key,pair.length==2?URLDecoder.decode(pair[1],"UTF-8"):"");}}
+  catch(Exception e){throw new ApiException(400,"INVALID_QUERY","Invalid or duplicate query parameters");}return q;
+ }
+ private static Double decimal(String value) {
+  if(value==null)return null;try {double d=Double.parseDouble(value);if(!Double.isFinite(d))throw new NumberFormatException();return d;}
+  catch(NumberFormatException e){throw new ApiException(400,"INVALID_NUMBER","Invalid coordinate or radius");}
+ }
+ private static synchronized void limitLogin(HttpExchange x) {
+  long now=System.currentTimeMillis();ATTEMPTS.values().removeIf(a->now-a.start>=60000);
+  String address=x.getRemoteAddress().getAddress().getHostAddress();Attempt a=ATTEMPTS.get(address);
+  if(a==null){if(ATTEMPTS.size()>=10000)throw new ApiException(429,"RATE_LIMITED","Try again later");a=new Attempt();ATTEMPTS.put(address,a);}
+  if(++a.count>20)throw new ApiException(429,"RATE_LIMITED","Too many authentication attempts; try again in one minute");
+ }
+ private static void send(HttpExchange x,int status,Object body) throws IOException {
+  byte[] bytes=JsonUtil.toJson(body).getBytes(StandardCharsets.UTF_8);x.getResponseHeaders().set("Content-Type","application/json; charset=UTF-8");x.sendResponseHeaders(status,bytes.length);try(OutputStream out=x.getResponseBody()){out.write(bytes);}
+ }
 }

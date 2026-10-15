@@ -1,160 +1,73 @@
 package com.bloodbank.util;
-
+import java.math.BigDecimal;
 import java.util.*;
-
-/**
- * Lightweight, zero-dependency JSON utility for generating and parsing JSON
- * payloads compatible with Java 1.8+ without external dependencies.
- */
-public class JsonUtil {
-
-    public static String toJson(Object obj) {
-        if (obj == null) return "null";
-        if (obj instanceof String) {
-            return "\"" + escapeJson((String) obj) + "\"";
-        }
-        if (obj instanceof Number || obj instanceof Boolean) {
-            return obj.toString();
-        }
-        if (obj instanceof Map) {
-            Map<?, ?> map = (Map<?, ?>) obj;
-            StringBuilder sb = new StringBuilder("{");
-            boolean first = true;
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append("\"").append(escapeJson(String.valueOf(entry.getKey()))).append("\":");
-                sb.append(toJson(entry.getValue()));
-            }
-            sb.append("}");
-            return sb.toString();
-        }
-        if (obj instanceof Collection) {
-            Collection<?> col = (Collection<?>) obj;
-            StringBuilder sb = new StringBuilder("[");
-            boolean first = true;
-            for (Object item : col) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append(toJson(item));
-            }
-            sb.append("]");
-            return sb.toString();
-        }
-        if (obj.getClass().isArray()) {
-            Object[] arr = (Object[]) obj;
-            StringBuilder sb = new StringBuilder("[");
-            boolean first = true;
-            for (Object item : arr) {
-                if (!first) sb.append(",");
-                first = false;
-                sb.append(toJson(item));
-            }
-            sb.append("]");
-            return sb.toString();
-        }
-        return "\"" + escapeJson(obj.toString()) + "\"";
-    }
-
-    private static String escapeJson(String s) {
-        if (s == null) return "";
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"': sb.append("\\\""); break;
-                case '\\': sb.append("\\\\"); break;
-                case '\b': sb.append("\\b"); break;
-                case '\f': sb.append("\\f"); break;
-                case '\n': sb.append("\\n"); break;
-                case '\r': sb.append("\\r"); break;
-                case '\t': sb.append("\\t"); break;
-                default:
-                    if (c < ' ') {
-                        String t = "000" + Integer.toHexString(c);
-                        sb.append("\\u").append(t.substring(t.length() - 4));
-                    } else {
-                        sb.append(c);
-                    }
-            }
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Parses a simple JSON object string into a Map of String key-value pairs.
-     */
-    public static Map<String, Object> parseJsonObject(String json) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        if (json == null) return map;
-        json = json.trim();
-        if (json.startsWith("{") && json.endsWith("}")) {
-            json = json.substring(1, json.length() - 1).trim();
-        }
-        if (json.isEmpty()) return map;
-
-        int len = json.length();
-        boolean inQuote = false;
-        StringBuilder currentKey = new StringBuilder();
-        StringBuilder currentValue = new StringBuilder();
-        boolean parsingKey = true;
-
-        for (int i = 0; i < len; i++) {
-            char c = json.charAt(i);
-            if (c == '"' && (i == 0 || json.charAt(i - 1) != '\\')) {
-                inQuote = !inQuote;
-                continue;
-            }
-            if (!inQuote) {
-                if (c == ':' && parsingKey) {
-                    parsingKey = false;
-                    continue;
-                }
-                if (c == ',') {
-                    String k = currentKey.toString().trim();
-                    String v = currentValue.toString().trim();
-                    if (!k.isEmpty()) {
-                        map.put(k, parseValue(v));
-                    }
-                    currentKey.setLength(0);
-                    currentValue.setLength(0);
-                    parsingKey = true;
-                    continue;
-                }
-            }
-            if (parsingKey) {
-                currentKey.append(c);
-            } else {
-                currentValue.append(c);
-            }
-        }
-        String k = currentKey.toString().trim();
-        String v = currentValue.toString().trim();
-        if (!k.isEmpty()) {
-            map.put(k, parseValue(v));
-        }
-        return map;
-    }
-
-    private static Object parseValue(String val) {
-        if (val == null) return null;
-        val = val.trim();
-        if (val.equalsIgnoreCase("null")) return null;
-        if (val.equalsIgnoreCase("true")) return Boolean.TRUE;
-        if (val.equalsIgnoreCase("false")) return Boolean.FALSE;
-        if (val.startsWith("\"") && val.endsWith("\"") && val.length() >= 2) {
-            return val.substring(1, val.length() - 1)
-                      .replace("\\\"", "\"")
-                      .replace("\\\\", "\\")
-                      .replace("\\n", "\n")
-                      .replace("\\t", "\t");
-        }
-        try {
-            if (val.contains(".")) {
-                return Double.parseDouble(val);
-            }
-            return Long.parseLong(val);
-        } catch (NumberFormatException ignored) {}
-        return val;
-    }
+/** Strict bounded-depth JSON codec. Rejects malformed input and duplicate keys. */
+public final class JsonUtil {
+ private JsonUtil() {}
+ public static String toJson(Object value) {
+  if(value==null)return "null";
+  if(value instanceof String)return quote((String)value);
+  if(value instanceof Boolean)return value.toString();
+  if(value instanceof Number) {
+   if((value instanceof Double && !Double.isFinite((Double)value))||(value instanceof Float && !Float.isFinite((Float)value)))throw new IllegalArgumentException("Non-finite JSON number");
+   return value.toString();
+  }
+  if(value instanceof Map) {
+   StringJoiner j=new StringJoiner(",","{","}");
+   for(Map.Entry<?,?> e:((Map<?,?>)value).entrySet())j.add(quote(String.valueOf(e.getKey()))+":"+toJson(e.getValue()));return j.toString();
+  }
+  if(value instanceof Iterable) {StringJoiner j=new StringJoiner(",","[","]");for(Object v:(Iterable<?>)value)j.add(toJson(v));return j.toString();}
+  throw new IllegalArgumentException("Unsupported JSON type");
+ }
+ private static String quote(String s) {
+  StringBuilder b=new StringBuilder("\"");
+  for(int i=0;i<s.length();i++) {
+   char c=s.charAt(i);
+   switch(c) {
+    case '"':b.append("\\\"");break;case '\\':b.append("\\\\");break;
+    case '\n':b.append("\\n");break;case '\r':b.append("\\r");break;case '\t':b.append("\\t");break;
+    default:if(c<32 || Character.isSurrogate(c))b.append(String.format("\\u%04x",(int)c));else b.append(c);
+   }
+  }return b.append('"').toString();
+ }
+ @SuppressWarnings("unchecked") public static Map<String,Object> parseJsonObject(String json) {
+  Parser p=new Parser(json);Object v=p.value(0);p.space();
+  if(p.i!=p.s.length() || !(v instanceof Map))throw bad();return (Map<String,Object>)v;
+ }
+ private static ApiException bad(){return new ApiException(400,"INVALID_JSON","Expected a valid JSON object");}
+ private static final class Parser {
+  final String s;int i;Parser(String s){if(s==null)throw bad();this.s=s;}
+  void space(){while(i<s.length() && " \r\n\t".indexOf(s.charAt(i))>=0)i++;}
+  boolean take(char c){space();if(i<s.length()&&s.charAt(i)==c){i++;return true;}return false;}
+  Object value(int depth) {
+   if(depth>16)throw bad();space();if(i>=s.length())throw bad();char c=s.charAt(i);
+   if(c=='"')return string();
+   if(c=='{') {
+    i++;Map<String,Object> m=new LinkedHashMap<>();if(take('}'))return m;
+    do {space();if(i>=s.length()||s.charAt(i)!='"')throw bad();String key=string();if(m.containsKey(key)||!take(':'))throw bad();m.put(key,value(depth+1));if(take('}'))return m;}while(take(','));throw bad();
+   }
+   if(c=='[') {i++;List<Object> a=new ArrayList<>();if(take(']'))return a;do {a.add(value(depth+1));if(take(']'))return a;}while(take(','));throw bad();}
+   for(String literal:Arrays.asList("true","false","null"))if(s.startsWith(literal,i)) {i+=literal.length();return literal.equals("null")?null:Boolean.valueOf(literal);}
+   int start=i;while(i<s.length() && ",]} \r\n\t".indexOf(s.charAt(i))<0)i++;
+   String n=s.substring(start,i);if(!n.matches("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?"))throw bad();
+   // Bound exponent as well as input length to avoid huge downstream numeric conversions.
+   try {BigDecimal number=new BigDecimal(n);if(Math.abs((long)number.scale())>1000 || number.precision()>1000)throw bad();return number;}
+   catch(NumberFormatException e){throw bad();}
+  }
+  String string() {
+   if(s.charAt(i++)!='"')throw bad();StringBuilder b=new StringBuilder();
+   while(i<s.length()) {
+    char c=s.charAt(i++);if(c=='"')return b.toString();if(c<32)throw bad();
+    if(c=='\\') {
+     if(i>=s.length())throw bad();char e=s.charAt(i++);
+     switch(e) {
+      case '"':case '\\':case '/':b.append(e);break;
+      case 'b':b.append('\b');break;case 'f':b.append('\f');break;case 'n':b.append('\n');break;case 'r':b.append('\r');break;case 't':b.append('\t');break;
+      case 'u':if(i+4>s.length()||!s.substring(i,i+4).matches("[0-9a-fA-F]{4}"))throw bad();try {b.append((char)Integer.parseInt(s.substring(i,i+4),16));}catch(NumberFormatException ex){throw bad();}i+=4;break;
+      default:throw bad();
+     }
+    }else b.append(c);
+   }throw bad();
+  }
+ }
 }
