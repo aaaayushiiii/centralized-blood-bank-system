@@ -10,10 +10,15 @@ export default function useHospitals(assignedHospitalId, dataApi = api) {
   useEffect(() => {
     const controller = new AbortController();
     setState({ hospitals: [], loading: true, error: "" });
-    dataApi
-      .getHospitals(controller.signal)
-      .then((hospitals) => {
-        if (assignedHospitalId) {
+    async function loadHospitals() {
+      try {
+        let hospitals = await dataApi.getHospitals(controller.signal);
+        if (controller.signal.aborted) return;
+        if (
+          assignedHospitalId !== undefined &&
+          assignedHospitalId !== null &&
+          assignedHospitalId !== ""
+        ) {
           hospitals = hospitals.filter(
             (h) => String(h.hospital_id) === String(assignedHospitalId),
           );
@@ -22,13 +27,19 @@ export default function useHospitals(assignedHospitalId, dataApi = api) {
               "Your assigned hospital is unavailable. Please contact your administrator.",
             );
         }
+        setState({ hospitals, loading: false, error: "" });
+      } catch (error) {
         if (!controller.signal.aborted)
-          setState({ hospitals, loading: false, error: "" });
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted)
-          setState({ hospitals: [], loading: false, error: error.message });
-      });
+          setState({
+            hospitals: [],
+            loading: false,
+            error:
+              error?.message ||
+              "Hospital records could not be loaded. Please retry.",
+          });
+      }
+    }
+    loadHospitals();
     return () => controller.abort();
   }, [attempt, assignedHospitalId, dataApi]);
   return { ...state, retry: () => setAttempt((n) => n + 1) };

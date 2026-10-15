@@ -1,5 +1,5 @@
 import { PREVIEW_ENABLED } from "../preview/config.js";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../services/api.js";
 import {
   Field,
@@ -26,37 +26,57 @@ export default function CitizenPortal({
     loading: false,
   });
   const [donorBlood, setDonorBlood] = useState("O+");
-  const searchLock = useRef(false),
-    donorLock = useRef(false);
+  const searchController = useRef(null);
+  const searchForm = useRef(null);
+  const donorLock = useRef(false);
+  useEffect(() => () => searchController.current?.abort(), []);
+
+  function resetSearch() {
+    searchController.current?.abort();
+    searchController.current = null;
+    setSearch({ rows: null, error: "", loading: false, label: "" });
+  }
   async function searchNearby(event) {
     event.preventDefault();
-    if (searchLock.current) return;
+    searchController.current?.abort();
+    searchController.current = null;
     const pincode = new FormData(event.currentTarget).get("pincode").trim();
-    if (!/^\d{6}$/.test(pincode)) {
+    if (!/^[1-9][0-9]{5}$/.test(pincode)) {
       setSearch({
         rows: null,
-        error: "Enter a six-digit pincode.",
+        error: "Enter a valid six-digit pincode.",
         loading: false,
+        label: "",
       });
       return;
     }
-    searchLock.current = true;
+    const controller = new AbortController();
+    searchController.current = controller;
     setSearch({ rows: null, error: "", loading: true, label: "" });
     try {
-      const result = await dataApi.searchHospitals({
-        pincode,
-        ...splitBloodGroup(blood),
-      });
+      const result = await dataApi.searchHospitals(
+        { pincode, ...splitBloodGroup(blood) },
+        controller.signal,
+      );
+      if (controller.signal.aborted || searchController.current !== controller)
+        return;
       setSearch({
         rows: result.hospitals,
         loading: false,
         error: "",
-        label: `${blood} · ${pincode}`,
+        label: `${blood} \u00b7 ${pincode}`,
       });
     } catch (error) {
-      setSearch({ rows: null, loading: false, error: error.message });
+      if (controller.signal.aborted || searchController.current !== controller)
+        return;
+      setSearch({
+        rows: null,
+        loading: false,
+        error: error?.message || "Hospital search failed. Please retry.",
+        label: "",
+      });
     } finally {
-      searchLock.current = false;
+      if (searchController.current === controller) searchController.current = null;
     }
   }
   async function register(event) {
@@ -143,14 +163,15 @@ export default function CitizenPortal({
                 <p>Search by location and blood group.</p>
               </div>
             </div>
-            <form onSubmit={searchNearby}>
+            <form ref={searchForm} onSubmit={searchNearby}>
               <fieldset disabled={search.loading}>
                 <div className="search-fields">
                   <Field
                     name="pincode"
+                    onChange={resetSearch}
                     label="Pincode"
                     inputMode="numeric"
-                    pattern="[0-9]{6}"
+                    pattern="[1-9][0-9]{5}"
                     maxLength={6}
                     required
                     placeholder="e.g. 632001"
@@ -164,7 +185,7 @@ export default function CitizenPortal({
                     value={blood}
                     onChange={(e) => {
                       setBlood(e.target.value);
-                      setSearch({ rows: null, error: "", loading: false });
+                      resetSearch();
                     }}
                   />
                 </div>
@@ -175,6 +196,20 @@ export default function CitizenPortal({
               </fieldset>
             </form>
             <Feedback error={search.error} loading={search.loading} />
+            {search.loading && (
+              <button type="button" className="secondary" onClick={resetSearch}>
+                Cancel search
+              </button>
+            )}
+            {search.error && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => searchForm.current?.requestSubmit()}
+              >
+                Retry hospital search
+              </button>
+            )}
           </section>
           <section
             className="results"
@@ -185,7 +220,7 @@ export default function CitizenPortal({
               <h2>Nearby availability</h2>
               {search.rows && <span>{search.label}</span>}
             </div>
-            {search.rows === null && !search.loading && (
+            {search.rows === null && !search.loading && !search.error && (
               <div className="empty">
                 <span className="empty-mark" aria-hidden="true">
                   +
@@ -209,7 +244,8 @@ export default function CitizenPortal({
                   <h3>{hospital.name}</h3>
                   <p>{hospital.address}</p>
                   <span>
-                    {distance_km.toFixed(1)} km away · {hospital.phone}
+                    {distance_km.toFixed(1)} km from search area
+                    {hospital.phone ? ` \u00b7 ${hospital.phone}` : ""}
                   </span>
                 </div>
                 <div className="units">
@@ -223,8 +259,8 @@ export default function CitizenPortal({
               </article>
             ))}
             <p className="caption">
-              Inventory can change. Confirm availability with the hospital
-              before travelling.
+              Counts include compatible blood groups. Inventory can change.
+              Confirm availability with the hospital before travelling.
             </p>
           </section>
         </div>

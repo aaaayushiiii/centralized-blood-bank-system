@@ -26,28 +26,51 @@ function requireHospital(hospital) {
     ["hospital_id", "name", "address", "phone"],
     "hospital",
   );
+  const id = hospital.hospital_id;
+  const validId =
+    (typeof id === "number" &&
+      Number.isSafeInteger(id) &&
+      id > 0 &&
+      id <= 9999999999) ||
+    (typeof id === "string" && /^[1-9][0-9]{0,9}$/.test(id));
   if (
+    Array.isArray(hospital) ||
+    !validId ||
     typeof hospital.name !== "string" ||
-    typeof hospital.address !== "string"
+    !hospital.name.trim() ||
+    typeof hospital.address !== "string" ||
+    !hospital.address.trim() ||
+    (hospital.phone !== null && typeof hospital.phone !== "string")
   ) {
-    throw new Error("Unexpected API response: invalid hospital text.");
+    throw new Error("Unexpected API response: invalid hospital record.");
   }
+}
+function requireUniqueHospital(hospital, ids) {
+  requireHospital(hospital);
+  const id = String(hospital.hospital_id);
+  if (ids.has(id))
+    throw new Error("Unexpected API response: duplicate hospital ID.");
+  ids.add(id);
 }
 function validate(data, type) {
   if (type === "hospitals") {
     if (!Array.isArray(data))
       throw new Error("Unexpected API response: hospitals must be an array.");
-    data.forEach(requireHospital);
+    const ids = new Set();
+    data.forEach((hospital) => requireUniqueHospital(hospital, ids));
   }
   if (type === "search") {
     if (!Array.isArray(data?.hospitals))
       throw new Error("Unexpected API response: missing search results.");
+    const ids = new Set();
     data.hospitals.forEach((row) => {
-      requireHospital(row.hospital);
+      if (!row || typeof row !== "object" || Array.isArray(row))
+        throw new Error("Unexpected API response: invalid search result.");
+      requireUniqueHospital(row.hospital, ids);
       if (
         !Number.isFinite(row.distance_km) ||
         row.distance_km < 0 ||
-        !Number.isInteger(row.available_units) ||
+        !Number.isSafeInteger(row.available_units) ||
         row.available_units < 0
       )
         throw new Error(
