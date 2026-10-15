@@ -1,4 +1,3 @@
-import { PREVIEW_ENABLED } from "../preview/config.js";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../services/api.js";
 import {
@@ -8,11 +7,7 @@ import {
 } from "../components/FormFields.jsx";
 import Feedback from "../components/Feedback.jsx";
 import PageHeading from "../components/PageHeading.jsx";
-export default function CitizenPortal({
-  dataApi = api,
-  preview: requestedPreview = false,
-}) {
-  const preview = PREVIEW_ENABLED && requestedPreview;
+export default function CitizenPortal({ dataApi = api }) {
   const [blood, setBlood] = useState("O+");
   const [search, setSearch] = useState({
     rows: null,
@@ -131,9 +126,7 @@ export default function CitizenPortal({
       setDonor({
         error: "",
         loading: false,
-        success: preview
-          ? `Preview registration: ${result.donor.donor_id}. No donor record was saved to a backend.`
-          : `Donor registered: ${result.donor.donor_id}. Registration does not confirm donation eligibility.`,
+        success: `Donor registered: ${result.donor.donor_id}. Registration does not confirm donation eligibility.`,
       });
       form.reset();
       setDonorBlood("O+");
@@ -175,11 +168,7 @@ export default function CitizenPortal({
                     maxLength={6}
                     required
                     placeholder="e.g. 632001"
-                    help={
-                      preview
-                        ? "Preview pincodes: 632001, 632002 or 632014. Distances are fictional."
-                        : "Your pincode is used only to find nearby hospitals."
-                    }
+                    help="Your pincode is used only to find nearby hospitals."
                   />
                   <BloodSelect
                     value={blood}

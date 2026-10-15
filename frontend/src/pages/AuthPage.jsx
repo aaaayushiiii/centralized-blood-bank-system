@@ -1,4 +1,3 @@
-import PreviewOptions from "../components/PreviewOptions.jsx";
 import { useRef, useState } from "react";
 import { Field, HospitalSelect } from "../components/FormFields.jsx";
 import Feedback from "../components/Feedback.jsx";
@@ -182,7 +181,6 @@ export default function AuthPage({ staff = false, registering = false }) {
             </form>
           )}
           <Feedback {...state} />
-          {!registering && <PreviewOptions staff={staff} />}
           <p className="caption">
             {registering ? (
               <a href={`#${prefix}/sign-in`}>Continue to sign in</a>

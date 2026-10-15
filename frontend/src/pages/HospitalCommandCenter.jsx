@@ -1,4 +1,3 @@
-import { PREVIEW_ENABLED } from "../preview/config.js";
 import { useEffect, useState } from "react";
 import { api } from "../services/api.js";
 import { HospitalSelect } from "../components/FormFields.jsx";
@@ -11,9 +10,7 @@ export default function HospitalCommandCenter({
   openRequest,
   assignedHospitalId,
   dataApi = api,
-  preview: requestedPreview = false,
 }) {
-  const preview = PREVIEW_ENABLED && requestedPreview;
   const { hospitals, loading, error, retry } = useHospitals(
     assignedHospitalId,
     dataApi,
@@ -87,11 +84,9 @@ export default function HospitalCommandCenter({
           />
         </div>
         <p>
-          {preview ? "Preview hospital workspace" : "Your hospital workspace"}
+          Your hospital workspace
           <br />
-          <strong>
-            {preview ? "Not authenticated" : "Approved staff access"}
-          </strong>
+          <strong>Approved staff access</strong>
         </p>
         <button
           className="secondary"

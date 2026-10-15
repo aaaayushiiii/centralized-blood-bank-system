@@ -1,4 +1,3 @@
-import PreviewOptions from "../components/PreviewOptions.jsx";
 import PageHeading from "../components/PageHeading.jsx";
 export default function RoleSelection() {
   return (
@@ -42,7 +41,6 @@ export default function RoleSelection() {
           </p>
         </section>
       </div>
-      <PreviewOptions both />
     </>
   );
 }

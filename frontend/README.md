@@ -29,7 +29,7 @@ npm run build
 npm run preview
 ```
 
-No new dependencies were added. DM Sans and existing colors, typography, layouts and spacing are retained. Only auth-specific CSS was appended. Fictional fixtures are used only by tests and the explicitly labelled development preview. They are excluded from production bundles. Live errors never fall back to fixtures. Authentication always calls the Java backend, regardless of inventory environment settings.
+No new dependencies were added. DM Sans and existing colors, typography, layouts and spacing are retained. Only auth-specific CSS was appended. Synthetic responses are used only in automated tests. Live errors never fall back to fixtures. Authentication always calls the Java backend, regardless of inventory environment settings.
 
 ## Routes
 
@@ -146,149 +146,11 @@ For cross-origin local development, allow the exact frontend origin, Access-Cont
 
 Run `npm test` for operational fixtures and API wrapper paths/payloads plus auth transport contracts, cookie credentials, CSRF headers, guest session responses, login confirmation, role/approval validation, access-request status, logout failures/204 and route policies. Tests stub responses only; they are not runtime authentication. `npm run build` validates JSX and builds production assets. Actual login, approval, session persistence and logout require the separately implemented Java backend.
 
-## Operational API contracts — agree with the Java developer
+## Operational API integration
 
-These endpoints are proposals, not implemented backend code or schema changes. JSON uses existing inventory attributes in snake_case. Wrapper objects, counts, distance and inventory metadata are response projections, **not new database columns**. IDs are shown as strings; agree actual Oracle ID types, serialization and generation. Confirm field lengths, nullability, gender and status enum values against the fixed schema. `blood_group`: O/A/B/AB; `rh_factor`: +/-.
+Operational screens use the Java REST API configured above. See `../backend/README.md` for the implemented contracts and Oracle behavior. Hospital listing, compatible blood search, donor registration, hospital inventory, request creation and allocation use the existing Java/JDBC services.
 
-### GET /hospitals
-
-200 response: HOSPITAL array. Empty array is a valid no-hospitals state.
-
-```json
-[
-  {
-    "hospital_id": "H-DEMO-01",
-    "name": "Sample North Hospital",
-    "address": "Fictional North District, Vellore",
-    "latitude": 12.94,
-    "longitude": 79.14,
-    "phone": "0000000000"
-  }
-]
-```
-
-### GET /hospitals/nearby?pincode=632001&blood_group=O&rh_factor=%2B
-
-200 response:
-
-```json
-{
-  "hospitals": [
-    {
-      "hospital": {
-        "hospital_id": "H-DEMO-01",
-        "name": "Sample North Hospital",
-        "address": "Fictional North District, Vellore",
-        "latitude": 12.94,
-        "longitude": 79.14,
-        "phone": "0000000000"
-      },
-      "distance_km": 2.4,
-      "available_units": 3
-    }
-  ]
-}
-```
-
-Pincode is a transient search parameter and must never be stored in DONOR or HOSPITAL. Backend converts pincode to coordinates, computes distance from existing hospital latitude/longitude, defines the radius and sorts by distance. `distance_km` and `available_units` are computed response values. Agree exact-match versus compatible-group search and which units qualify as available; expired/reserved bags must not count. No results: `{ "hospitals": [] }`. Invalid/unresolved pincode: clear 4xx error. UI never computes geocoding or distance.
-
-### GET /hospitals/{hospital_id}/inventory
-
-200 response:
-
-```json
-{
-  "as_of_date": "2026-10-13",
-  "near_expiry_days": 7,
-  "bags": [
-    {
-      "bag_id": "B-DEMO-001",
-      "donor_id": "D-DEMO-001",
-      "hospital_id": "H-DEMO-01",
-      "blood_group": "O",
-      "rh_factor": "+",
-      "collection_date": "2026-09-20",
-      "expiry_date": "2026-10-15",
-      "bag_status": "Available"
-    }
-  ]
-}
-```
-
-Bag fields belong to BLOOD_BAGS. `as_of_date` and `near_expiry_days` are response metadata supplied by the backend. UI derives counts and warnings from bags. Near-expiry includes Available, unexpired bags within the threshold. Agree timezone and expiry-at-start/end-of-day rules; this proposal treats expiry on as_of_date as still unexpired. Return all bags for accurate counts; pagination requires a revised contract with server aggregates. UI recognizes Available, Reserved and Expired; other statuses still display in table and filter.
-
-### POST /donors
-
-Request (existing DONOR attributes only):
-
-```json
-{
-  "full_name": "Fictional Demo Donor",
-  "age": 25,
-  "gender": "Female",
-  "blood_group": "O",
-  "rh_factor": "+",
-  "contact_number": "0000000000",
-  "last_donation_date": null
-}
-```
-
-201 response: `{ "donor": { "donor_id": "D-DEMO-NEW-1", "full_name": "Fictional Demo Donor", "age": 25, "gender": "Female", "blood_group": "O", "rh_factor": "+", "contact_number": "0000000000", "last_donation_date": null } }`.
-
-Backend creates donor_id and validates age, gender, phone, field lengths and nullability. UI age limits 1–120 are sanity checks, not donation eligibility. No pincode, account or eligibility fields are proposed. Backend must enforce all validation; registration does not confirm eligibility.
-
-### POST /requests
-
-Request (existing REQUEST attributes only):
-
-```json
-{
-  "hospital_id": "H-DEMO-01",
-  "blood_group": "O",
-  "rh_factor": "+",
-  "units_requested": 2,
-  "priority": "Critical"
-}
-```
-
-201 response:
-
-```json
-{
-  "request": {
-    "request_id": "R-DEMO-1",
-    "hospital_id": "H-DEMO-01",
-    "blood_group": "O",
-    "rh_factor": "+",
-    "units_requested": 2,
-    "priority": "Critical",
-    "request_status": "Pending",
-    "request_time": "2026-10-13T10:00:00+05:30"
-  }
-}
-```
-
-Backend generates ID, status and timestamp. Priority: Critical/Urgent/Routine. Units: positive integer. Request creation does not allocate blood. Pending/Allocated are proposed API/mock values; confirm exact status vocabulary against Phase 1, without changing schema.
-
-### POST /requests/{request_id}/allocations
-
-Request: `{}`. 200 response:
-
-```json
-{
-  "request": { "request_id": "R-DEMO-1", "request_status": "Allocated" },
-  "allocations": [
-    {
-      "allocation_id": "A-DEMO-1",
-      "request_id": "R-DEMO-1",
-      "bag_id": "B-DEMO-001",
-      "allocated_at": "2026-10-13T10:01:00+05:30"
-    }
-  ]
-}
-```
-
-Allocation fields belong to ALLOCATION. Backend owns clinical compatibility, priority scheduling, expiry checks, atomic transactions, unique BAG_ID enforcement, BLOOD_BAGS status transitions and BAG_STATUS_LOG audit entries. Prevent double allocation under concurrency and retries. Agree partial versus all-or-nothing allocation; mock uses all-or-nothing and rejects repeats. Allocation must not bypass higher-priority requests. UI never directly writes statuses or audit logs. Agree idempotency behavior.
+Request creation and allocation are separate actions. Java owns committed Oracle transactions, compatibility, FEFO reservation and audit logging. The frontend never writes database statuses or audit records directly.
 
 ### Errors and networking
 
@@ -307,22 +169,4 @@ Agree 400 validation/unresolved pincode, 404 unknown IDs, 409 stock/concurrency 
 
 ## Verification
 
-`npm test` checks availability counts, unsupported pincodes, atomic failed allocation, duplicate allocation prevention and live transport errors. `npm run build` compiles JSX and builds production assets. Live integration cannot be confirmed until the Java backend implements agreed contracts.
-
-## Development-only portal preview (without a backend)
-
-The local ignored `.env` is enabled for this task. On a fresh checkout, set:
-
-```dotenv
-VITE_ENABLE_PREVIEW=true
-```
-
-Restart `npm run dev` after changing the flag. Keep `VITE_API_MODE=live`: preview is separate from the real API mode and never changes sign-in behavior. On `#/roles`, choose **Preview Hospital Dashboard** or **Preview Citizen Portal**. The same options appear on the matching sign-in screens. Direct routes are `#/preview/hospital`, `#/preview/citizen` and `#/preview/request` on the URL printed by Vite. Preview can open even while the real session check is pending or fails.
-
-A persistent banner labels development preview as **not authenticated**, with fictional hospitals, inventory, distances and a fixed reference date of 2026-10-13. No real availability is claimed. Existing screens and forms are reused with an explicitly injected in-memory data service. Citizen preview supports pincodes 632001, 632002 and 632014. Donor registration, requests and allocation operate only on memory fixtures and are labelled as preview results; no API mutations or real records are created. Do not enter real personal data. Navigation between preview screens shares those fixtures; exiting preview or reloading resets them. **Exit preview** returns to role selection.
-
-To disable, set `VITE_ENABLE_PREVIEW=false` (or remove the variable), then restart Vite. Preview options disappear and direct preview routes show Page not found. Normal Citizen/Staff Sign In still calls the actual Java authentication APIs and verifies `/auth/me`; backend connection failures remain errors. No preview code sets AuthContext.user, stores auth state, creates tokens or grants real-role access. Normal `#/citizen`, `#/hospital` and `#/request` guards remain intact.
-
-Production protection is based on the Vite command, not just `import.meta.env.DEV`: `vite.config.js` defines preview as false for every build and for `vite preview`, even with `VITE_ENABLE_PREVIEW=true`, `--mode development`, or `NODE_ENV=development`. A conditional lazy import excludes the preview workspace and fixtures from built assets. `npm run preview` serves a built application and **cannot** enable this development feature.
-
-Added `src/preview/policy.js`, `src/preview/config.js`, `src/preview/PreviewWorkspace.jsx`, `src/components/PreviewOptions.jsx` and `tests/preview.test.js`. Updated app routing, sign-in/role-selection links, the existing pages and hospital hook for explicit data-service injection, Vite config and environment examples. Existing CSS, auth services, backend and database files are unchanged.
+`npm test` checks the existing live API transport, response contracts, authentication and hospital lifecycle behavior using synthetic responses. `npm run build` compiles JSX and builds production assets. These automated checks do not create Oracle records.

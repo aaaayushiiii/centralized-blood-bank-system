@@ -1,6 +1,6 @@
 # Java/JDBC blood bank backend
 
-The production backend is `com.bloodbank.server.BloodBankServer`, using JDK 17+ and Oracle JDBC. There is no mock-success mode. `server.js` is a retired entrypoint that deliberately exits with an error. Never place `target/test-classes` or test build directories on the production classpath.
+The production backend is `com.bloodbank.server.BloodBankServer`, using JDK 17+ and Oracle JDBC. There is no mock-success mode. Never place `target/test-classes` or test build directories on the production classpath.
 
 ## Database contract
 
