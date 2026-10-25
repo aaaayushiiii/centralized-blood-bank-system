@@ -35,6 +35,13 @@ export function AuthProvider({ children }) {
     window.addEventListener("auth:expired", expire);
     return () => window.removeEventListener("auth:expired", expire);
   }, []);
+  useEffect(() => {
+    if (state.user?.role !== "ADMIN") return;
+    // Upper bound for this UI instance; Oracle-backed requests remain authoritative
+    // for sessions restored partway through their absolute 30-minute lifetime.
+    const timer = setTimeout(() => window.dispatchEvent(new Event("auth:expired")), 30 * 60 * 1000);
+    return () => clearTimeout(timer);
+  }, [state.user]);
   async function login(body) {
     const current = ++version.current;
     const session = await auth.login(body);

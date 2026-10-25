@@ -5,6 +5,8 @@ import EmergencyRequest from "./pages/EmergencyRequest.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import RoleSelection from "./pages/RoleSelection.jsx";
 import AuthPage from "./pages/AuthPage.jsx";
+import HospitalRegistration from "./pages/HospitalRegistration.jsx";
+import AdminDashboard from "./pages/AdminDashboard.jsx";
 import Feedback from "./components/Feedback.jsx";
 import { useAuth } from "./auth/AuthContext.jsx";
 import {
@@ -38,7 +40,7 @@ export default function App() {
     if (loading) return;
     if (routes[path] && !user)
       navigate(
-        routes[path] === "CITIZEN" ? "/citizen/sign-in" : "/hospital/sign-in",
+        routes[path] === "ADMIN" ? "/admin/sign-in" : routes[path] === "CITIZEN" ? "/citizen/sign-in" : "/hospital/sign-in",
         true,
       );
     else if (
@@ -72,7 +74,7 @@ export default function App() {
   }
   const staff = user?.role === "HOSPITAL_STAFF";
   const viewLinks = user
-    ? staff
+    ? user.role === "ADMIN" ? [["/admin", "Hospital application review"]] : staff
       ? [
           ["/hospital", "Hospital command center"],
           ["/request", "Emergency request"],
@@ -161,6 +163,9 @@ export default function App() {
             )}
             {path === "/" && <LandingPage />}
             {path === "/roles" && <RoleSelection />}
+            {path === "/hospital/register" && <HospitalRegistration key={path} />}
+            {!user && path === "/admin/sign-in" && <AuthPage key={path} admin />}
+            {allowed && user?.role === "ADMIN" && path === "/admin" && <AdminDashboard key={user.user_id} />}
             {!user && path === "/citizen/sign-in" && (
               <AuthPage key={path} />
             )}{" "}

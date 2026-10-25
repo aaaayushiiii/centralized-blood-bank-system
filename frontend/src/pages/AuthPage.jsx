@@ -33,7 +33,7 @@ function StaffHospitalField({ hospitalId, setHospitalId }) {
     </>
   );
 }
-export default function AuthPage({ staff = false, registering = false }) {
+export default function AuthPage({ staff = false, registering = false, admin = false }) {
   const { login } = useAuth();
   const [hospitalId, setHospitalId] = useState("");
   const [state, setState] = useState({
@@ -42,7 +42,7 @@ export default function AuthPage({ staff = false, registering = false }) {
     loading: false,
   });
   const lock = useRef(false);
-  const title = registering
+  const title = admin ? "Administrator login." : registering
     ? staff
       ? "Request hospital staff access."
       : "Create your citizen account."
@@ -88,13 +88,18 @@ export default function AuthPage({ staff = false, registering = false }) {
       } else {
         const user = await login({
           ...body,
-          role: staff ? "HOSPITAL_STAFF" : "CITIZEN",
+          role: admin ? "ADMIN" : staff ? "HOSPITAL_STAFF" : "CITIZEN",
         });
         form.reset();
         navigate(roleHome(user), true);
       }
     } catch (error) {
-      setState({ error: error.message, success: "", loading: false });
+      setState({ error: admin
+        ? error.status === 403 ? "Administrator access is unavailable. Local admin mode must be enabled on the loopback server."
+          : error.status === 401 ? "Sign-in failed. Check your administrator credentials and active account."
+          : error.status === 429 ? "Too many sign-in attempts. Please wait before trying again."
+          : "Administrator sign-in could not be completed. Check the local service and try again."
+        : error.message, success: "", loading: false });
     } finally {
       lock.current = false;
       if (form.elements.password) form.elements.password.value = "";
@@ -105,10 +110,10 @@ export default function AuthPage({ staff = false, registering = false }) {
   return (
     <>
       <PageHeading
-        eyebrow={staff ? "Hospital staff" : "Citizen access"}
+        eyebrow={admin ? "Restricted administrator access" : staff ? "Hospital staff" : "Citizen access"}
         title={title}
         description={
-          registering
+          admin ? "Authorized local administrators only. Sessions expire after 30 minutes. No public administrator signup is available." : registering
             ? staff
               ? "Request access to your hospital workspace. Approval is handled by your hospital administrator."
               : "Create an account to use the citizen portal and register your interest as a donor."
@@ -181,7 +186,7 @@ export default function AuthPage({ staff = false, registering = false }) {
             </form>
           )}
           <Feedback {...state} />
-          <p className="caption">
+          {!admin && <p className="caption">
             {registering ? (
               <a href={`#${prefix}/sign-in`}>Continue to sign in</a>
             ) : (
@@ -192,7 +197,7 @@ export default function AuthPage({ staff = false, registering = false }) {
                 </a>
               </>
             )}
-          </p>
+          </p>}
           <a className="text-button auth-link" href="#/roles">
             Choose a different role
           </a>
@@ -200,17 +205,17 @@ export default function AuthPage({ staff = false, registering = false }) {
         <aside className="request-notes">
           <p className="eyebrow">Your workspace</p>
           <h2>
-            {staff
+            {admin ? "Hospital network review." : staff
               ? "Clear coordination at every handoff."
               : "A clearer path to care."}
           </h2>
           <p className="auth-description">
-            {staff
+            {admin ? "Review official hospital identities and representative authority before making a decision. Government registry checks are manual, never automatic." : staff
               ? "Approved staff can review hospital blood inventory, monitor expiry and coordinate requests. Requesting access does not grant hospital permissions."
               : "Find hospital information by pincode and blood group, and maintain your donor registration. Account signup and donor registration are separate steps."}
           </p>
           <div className="note">
-            {staff
+            {admin ? "Local academic demonstration only. Administrator access requires server-side authorization." : staff
               ? "Only an approved hospital staff session can open the command center."
               : "Availability is shown only after information is returned by the hospital service."}
           </div>

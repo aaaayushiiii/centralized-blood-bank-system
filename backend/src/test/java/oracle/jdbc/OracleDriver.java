@@ -12,8 +12,10 @@ public final class OracleDriver implements Driver {
  public static final class Step {
   final String sql;final List<Map<String,Object>> rows;
   public final Map<Integer,Object> expected=new LinkedHashMap<>(),out=new HashMap<>();
+  public final Map<Integer,Object> actual=new HashMap<>();
   public final Map<Integer,Integer> outTypes=new HashMap<>();
   public SQLException failure;
+  public int updatedRows=1;
   public List<Map<String,Object>> cursor;
   Step(String sql,List<Map<String,Object>> rows){this.sql=sql;this.rows=rows;}
   public Step bind(int index,Object value){expected.put(index,value);return this;}
@@ -23,6 +25,7 @@ public final class OracleDriver implements Driver {
   final Queue<Step> steps=new ArrayDeque<>();
   public int commits,rollbacks,openStatements,openResults;
   public boolean closed,transaction;
+  public SQLException commitFailure;
   @SafeVarargs public final Step query(String sql,Map<String,Object>... rows){Step step=new Step(sql,Arrays.asList(rows));steps.add(step);return step;}
   public Step update(String sql){return query(sql);}
   public void done(int commits,int rollbacks) {
@@ -38,7 +41,7 @@ public final class OracleDriver implements Driver {
     case "prepareStatement":case "prepareCall":
      Step step=script.steps.poll();require(step!=null,"Unexpected SQL: "+a[0]);require(((String)a[0]).contains(step.sql),"Wrong SQL. Expected "+step.sql+" got "+a[0]);return statement(script,step,m.getName().equals("prepareCall"));
     case "setAutoCommit":script.transaction=!(Boolean)a[0];return null;
-    case "commit":require(script.transaction,"Commit outside transaction");script.commits++;return null;
+    case "commit":require(script.transaction,"Commit outside transaction");if(script.commitFailure!=null)throw script.commitFailure;script.commits++;return null;
     case "rollback":script.rollbacks++;return null;
     case "close":script.closed=true;return null;
     case "isValid":return true;
@@ -56,11 +59,12 @@ public final class OracleDriver implements Driver {
    switch(name) {
     case "registerOutParameter":registered.put((Integer)a[0],(Integer)a[1]);return null;
     case "execute":case "executeQuery":case "executeUpdate":
+     step.actual.putAll(bound);
      for(Map.Entry<Integer,Object> e:step.expected.entrySet()) require(Objects.equals(e.getValue(),bound.get(e.getKey())),"Wrong bind "+e.getKey()+": "+bound.get(e.getKey()));
      require(registered.equals(step.outTypes),"Incorrect OUT parameters: "+registered);
      if(step.failure!=null)throw step.failure;
      if(name.equals("executeQuery"))return results(script,step.rows);
-     return name.equals("executeUpdate")?1:false;
+     return name.equals("executeUpdate")?step.updatedRows:false;
     case "getString":return step.out.get((Integer)a[0]);
     case "getInt":case "getLong":Object number=step.out.get((Integer)a[0]);return number==null?0:((Number)number).intValue();
     case "getObject":return step.cursor==null?step.out.get((Integer)a[0]):results(script,step.cursor);

@@ -1,6 +1,6 @@
 import { requestJson } from "./transport.js";
 import { getCsrfToken, setCsrfToken } from "./sessionSecurity.js";
-export const ROLES = { CITIZEN: "CITIZEN", STAFF: "HOSPITAL_STAFF" };
+export const ROLES = { CITIZEN: "CITIZEN", STAFF: "HOSPITAL_STAFF", ADMIN: "ADMIN" };
 export function validateSession(data) {
   if (!data || !Object.hasOwn(data, "user"))
     throw new Error(
@@ -10,7 +10,7 @@ export function validateSession(data) {
   if (user !== null) {
     if (
       !user ||
-      !["CITIZEN", "HOSPITAL_STAFF"].includes(user.role) ||
+      !Object.values(ROLES).includes(user.role) ||
       typeof user.full_name !== "string" ||
       !user.full_name.trim() ||
       typeof user.email !== "string" ||

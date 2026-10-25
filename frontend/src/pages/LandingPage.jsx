@@ -50,6 +50,9 @@ export default function LandingPage() {
               Request access for your hospital
             </a>
           </p>
+          <p className="caption">
+            New to the network? <a href="#/hospital/register">Register Your Hospital</a>
+          </p>
         </section>
       </div>
       <p className="caption">

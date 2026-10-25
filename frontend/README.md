@@ -42,12 +42,60 @@ Routes use hash navigation without React Router. Open as `http://127.0.0.1:5173/
 | `#/citizen/sign-up`         | Public                         | Citizen account signup                     |
 | `#/citizen/sign-in`         | Public                         | Citizen sign-in                            |
 | `#/hospital/request-access` | Public                         | Request staff access; approval required    |
+| `#/hospital/register`       | Public                         | Apply to register a new hospital           |
 | `#/hospital/sign-in`        | Public                         | Hospital staff sign-in                     |
 | `#/citizen`                 | Verified active citizen        | Existing Citizen Portal                    |
 | `#/hospital`                | Verified active hospital staff | Existing Hospital Command Center           |
 | `#/request`                 | Verified active hospital staff | Existing emergency request/allocation flow |
 
 Legacy `#citizen`, `#hospital` and `#request` hashes still resolve and are guarded. Unknown routes show Page not found. Anonymous protected visits redirect to the relevant sign-in screen; wrong-role visits redirect to the user's own workspace. Signed-in users visiting auth forms return to their own workspace.
+
+## Hospital onboarding frontend
+
+Home and role selection include **Register Your Hospital**, linking to
+`#/hospital/register`. Existing staff sign-in and access-request links remain.
+This public route also works for an already signed-in representative and does
+not grant any dashboard permission.
+
+The form follows `backend/HOSPITAL_ONBOARDING.md`: thirteen required text fields
+plus optional paired coordinates. Representative designation is sent as
+`representative_title`. The payload is allowlisted and never sends review
+metadata, approval status, hospital IDs, passwords or roles. Client validation
+checks UTF-8 byte limits, contacts, official codes and coordinate bounds/precision;
+the Java API remains authoritative. Canonical authority/jurisdiction codes must
+be agreed with the administrator; the frontend does not invent a code catalog.
+
+The existing API base URL, cookie transport and in-memory CSRF mechanism are
+reused. The new client bootstraps through `/auth/me` only if a token is absent,
+then POSTs `/hospital-registration-requests`. An additive `expectedStatus` option
+in the shared transport requires HTTP 201 for this call; existing consumers
+retain their prior behavior. A valid numeric reference and PENDING response
+are required before displaying success. Registration never logs the applicant
+in or activates a hospital/account.
+
+Submission is locked synchronously while pending and after success. Recoverable
+validation/conflict/availability errors retain entered values for a deliberate
+retry. CSRF expiry clears only the token so a later manual retry bootstraps it;
+POSTs are never automatically replayed. A network failure after sending or an
+unconfirmed success blocks further submissions in that mounted form and asks
+the applicant to contact the administrator. There is no idempotency/status API;
+refresh/navigation cannot guarantee exactly-once submission, and an interrupted
+request may have committed. No application data is stored in browser storage.
+
+Targeted verification only:
+
+```powershell
+node --test tests/hospital-registration.test.js
+npm run build
+```
+
+Observed result: 25 reported tests passed, production build passed, with no new
+dependencies. Tests cover exact payload/normalization, validation, guest CSRF,
+cookies, expected success status, API failures, routing/navigation and React
+submission lifecycle. They use synthetic fetch responses, server-rendered React
+markup and the existing dependency-free hook scheduler pattern. They do not
+claim real-browser layout or live React-to-Oracle verification. No live POSTs,
+Oracle writes or existing citizen/FEFO integration suites were run in this phase.
 
 ## Session behavior
 
@@ -170,3 +218,17 @@ Agree 400 validation/unresolved pincode, 404 unknown IDs, 409 stock/concurrency 
 ## Verification
 
 `npm test` checks the existing live API transport, response contracts, authentication and hospital lifecycle behavior using synthetic responses. `npm run build` compiles JSX and builds production assets. These automated checks do not create Oracle records.
+
+## Local administrator web dashboard (Task 4)
+
+The role-selection page includes **Administrator Login** at `#/admin/sign-in`. An ACTIVE ADMIN session opens `#/admin`. Citizen and hospital-staff sessions retain their existing workspaces. There is no administrator signup screen. The existing API URL, cookie transport, CSRF store and dependencies are reused; no password, session identifier or review token is saved in browser storage.
+
+The dashboard reads the Java APIs documented in [ADMIN_HOSPITAL_REVIEW.md](../backend/ADMIN_HOSPITAL_REVIEW.md). It lists Pending, Approved and Rejected applications in pages of 20 using `after_id`, opens full details, and holds the signed review token in component memory. Local demo approval only asks "Approve this hospital?" after reviewing submitted details. Verified identity re-entry, checkboxes, evidence and typed phrases are not required. Rejection asks for a reason and confirmation. Java records fixed academic-demo notes and server-derived reviewer metadata; official government verification is not performed. The HFR link is optional information. These operations remain restricted by the existing loopback-only WEB_ADMIN_ENABLED policy.
+
+Decisions are never automatically retried. Any failed or uncertain decision requires reloading details and checking the current status before reviewing again. Successful decisions refresh the queue. Repeated submissions are blocked while saving. The backend always authorizes the operation and derives reviewer metadata; frontend route guards only improve usability.
+
+Administrator sessions have a server-enforced absolute 30-minute lifetime. React also clears administrator state after a 30-minute UI upper bound, and the dashboard rechecks the protected session every minute and on window focus. A restored session may have less time remaining; server responses remain authoritative. Confirmed logout clears React identity, unmounts review state, and reboots guest CSRF. A failed logout is reported without claiming the server session ended.
+
+Local prerequisites, to be configured only when separately approved: an intentionally created web ADMIN account, backend `WEB_ADMIN_ENABLED=true`, loopback binding and an allowed local frontend origin. There are no new VITE_* credentials or flags. The current SYSTEM JDBC connection is excessive privilege for a classroom demonstration and is not suitable for deployment. The restricted CLI's safeguards remain unchanged.
+
+Focused tests: `node --test tests/admin-review.test.js`. Full frontend tests: `npm test`. Production build: `npm run build`. Tests use synthetic fetch responses and an isolated React hook scheduler; they do not connect to Oracle or replace runtime data. They verify contracts/handlers and do not claim browser layout or live Oracle verification. Task 4 creates no administrator account and performs no live approval/rejection.
