@@ -11,7 +11,7 @@ export class ApiError extends Error {
 export async function requestJson(
   baseUrl,
   path,
-  { method = "GET", body, signal, notifyUnauthorized = true } = {},
+  { method = "GET", body, signal, notifyUnauthorized = true, expectedStatus } = {},
 ) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -38,7 +38,7 @@ export async function requestJson(
       typeof window !== "undefined"
     )
       window.dispatchEvent(new Event("auth:expired"));
-    if (response.status === 204 && response.ok) return null;
+    if (response.status === 204 && response.ok && expectedStatus === undefined) return null;
     let data;
     try {
       data = await response.json();
@@ -58,6 +58,8 @@ export async function requestJson(
       error.csrfToken = data?.csrf_token;
       throw error;
     }
+    if (expectedStatus !== undefined && response.status !== expectedStatus)
+      throw new ApiError("The submission response could not be confirmed. Check the result before retrying.", response.status, "UNEXPECTED_STATUS");
     return data;
   } catch (error) {
     if (signal?.aborted) throw error;

@@ -5,11 +5,15 @@ export const routes = {
   "/citizen/sign-up": null,
   "/hospital/sign-in": null,
   "/hospital/request-access": null,
+  "/hospital/register": null,
+  "/admin/sign-in": null,
+  "/admin": "ADMIN",
   "/citizen": "CITIZEN",
   "/hospital": "HOSPITAL_STAFF",
   "/request": "HOSPITAL_STAFF",
 };
 export function roleHome(user) {
+  if (user?.role === "ADMIN") return "/admin";
   return user?.role === "HOSPITAL_STAFF" ? "/hospital" : "/citizen";
 }
 export function canAccess(path, user) {

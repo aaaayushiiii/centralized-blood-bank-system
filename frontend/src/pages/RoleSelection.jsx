@@ -39,8 +39,15 @@ export default function RoleSelection() {
               Request hospital staff access
             </a>
           </p>
+          <p className="caption">
+            New institution? <a href="#/hospital/register">Register Your Hospital</a>
+          </p>
         </section>
       </div>
+      <section className="surface admin-entry">
+        <div><h2>Administrator</h2><p>Restricted local access for hospital application review.</p></div>
+        <a className="secondary auth-link" href="#/admin/sign-in">Administrator Login</a>
+      </section>
     </>
   );
 }
